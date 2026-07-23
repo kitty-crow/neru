@@ -1,0 +1,9 @@
+/node_modules/
+/dist/*
+!/dist/.gitkeep
+/coverage/
+*.log
+*.tsbuildinfo
+.DS_Store
+.vscode/
+.idea/

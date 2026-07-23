@@ -1,0 +1,17 @@
+{
+  "name": "@kitty-crow/neru",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Build and boot NERU Linux-WASM while attaching one authoritative Thistle userspace.",
+  "type": "module",
+  "author": {"name": "Kitty Crow", "url": "https://kittycrow.dev"},
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node --check bin/neru-linux-runtime.mjs && node --check runtime/node-worker-bootstrap.mjs && python3 -m py_compile scripts/prepare-userland.py",
+    "build:linux": "bash scripts/build-linux.sh",
+    "build:image": "bun neru.ts",
+    "fs": "node dist/src/fs/daemon-cli.js",
+    "test": "npm run build && python3 -m unittest discover -s tests -p 'test_*.py' && node --test dist/tests/*.test.js",
+    "run": "node dist/neru.js --boot --skip-build"
+  },
+  "devDependencies": {"@types/node": "^22.0.0", "typescript": "^5.0.0"}
+}
