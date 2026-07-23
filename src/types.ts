@@ -15,6 +15,8 @@ export interface NeruBuildOptions {
   variant?: NeruVariant;
   workspace?: string;
   rebuildLinux?: boolean;
+  sharedFs?: string;
+  sharedFsToken?: string;
 }
 
 export interface NeruBootOptions {
@@ -22,6 +24,8 @@ export interface NeruBootOptions {
   linuxRuntime?: string;
   kernel?: string;
   initramfs?: string;
+  sharedFs?: string;
+  sharedFsToken?: string;
   argv?: string[];
   environment?: Record<string, string>;
 }
@@ -32,10 +36,16 @@ export interface NeruBootPlan {
   environment: Record<string, string>;
   kernel: string;
   initramfs: string;
+  browserRuntime: string;
+  browserWorker: string;
+  sharedFs: string;
 }
 
 export interface NeruProbeResult {
   executable: string;
   kernel: string;
   initramfs: string;
+  browserRuntime: string;
+  browserWorker: string;
+  sharedFs: string;
 }

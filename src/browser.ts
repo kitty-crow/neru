@@ -1,4 +1,6 @@
 import type { NeruVariant } from "./types.js";
+import { FetchSharedFsClient } from "./fs/client.js";
+import { NeruLinuxFsBridge } from "./fs/linux-bridge.js";
 
 export interface NeruBrowserMachine {
   keyInput(data: string): void;
@@ -11,6 +13,8 @@ export interface NeruBrowserBootOptions {
   workerUrl?: string | URL;
   kernelUrl?: string | URL;
   initramfsUrl?: string | URL;
+  sharedFs?: string | URL;
+  sharedFsToken?: string;
   variant?: NeruVariant;
   commandLine?: string;
   log?: (message: string) => void;
@@ -26,6 +30,7 @@ export interface NeruBrowserBootPlan {
   workerUrl: URL;
   kernelUrl: URL;
   initramfsUrl: URL;
+  sharedFs: URL;
   variant: NeruVariant;
   commandLine: string;
 }
@@ -42,6 +47,7 @@ export type NeruLinuxBrowserRuntime = (
   initramfs: ArrayBuffer,
   log: (message: string) => void,
   write: (message: string) => void,
+  fsBridge: (request: Uint8Array) => Promise<Uint8Array>,
 ) => Promise<UpstreamLinuxMachine>;
 
 interface TransferableArrayBuffer extends ArrayBuffer {
@@ -51,14 +57,11 @@ interface TransferableArrayBuffer extends ArrayBuffer {
 const installArrayBufferTransfer = (): void => {
   const prototype = ArrayBuffer.prototype as TransferableArrayBuffer;
   if (typeof prototype.transfer === "function") return;
-
   Object.defineProperty(prototype, "transfer", {
     configurable: true,
     writable: true,
     value(this: ArrayBuffer, newLength = this.byteLength): ArrayBuffer {
-      if (!Number.isInteger(newLength) || newLength < 0) {
-        throw new RangeError("invalid ArrayBuffer transfer length");
-      }
+      if (!Number.isInteger(newLength) || newLength < 0) throw new RangeError("invalid ArrayBuffer transfer length");
       const source = new Uint8Array(this);
       const output = new ArrayBuffer(newLength);
       new Uint8Array(output).set(source.subarray(0, Math.min(source.length, newLength)));
@@ -77,12 +80,19 @@ export function planNeruBrowserBoot(
     ? new URL("http://localhost/")
     : new URL(document.baseURI);
   const base = absolute(options.base ?? "./neru/", documentBase);
+  const sharedFs = options.sharedFs ?? (
+    typeof location === "undefined"
+      ? undefined
+      : new URL(location.href).searchParams.get("shared-fs") ?? undefined
+  );
+  if (!sharedFs) throw new Error("NERU web requires a common authoritative shared-filesystem endpoint");
   const variant = options.variant ?? "wasm32_nommu";
   return {
     runtimeUrl: absolute(options.runtimeUrl ?? "linux.js", base),
     workerUrl: absolute(options.workerUrl ?? "linux-worker.js", base),
     kernelUrl: absolute(options.kernelUrl ?? "vmlinux.wasm", base),
     initramfsUrl: absolute(options.initramfsUrl ?? "initramfs.cpio.gz", base),
+    sharedFs: absolute(sharedFs, documentBase),
     variant,
     commandLine: options.commandLine ??
       "maxcpus=3 nohz_full=0,2-63 rcu_nocbs=0,2-63 " +
@@ -99,9 +109,7 @@ export async function loadNeruLinuxBrowserRuntime(
   const source = await response.text();
   const factory = new Function(`${source}\nreturn linux;`) as () => unknown;
   const runtime = factory();
-  if (typeof runtime !== "function") {
-    throw new Error("Pinned Linux-WASM browser runtime did not expose linux()");
-  }
+  if (typeof runtime !== "function") throw new Error("NERU Linux-WASM browser runtime did not expose linux()");
   return runtime as NeruLinuxBrowserRuntime;
 }
 
@@ -110,17 +118,24 @@ export async function bootNeruBrowser(
 ): Promise<NeruBrowserMachine> {
   const isolated = options.crossOriginIsolated ?? globalThis.crossOriginIsolated;
   if (isolated !== true) {
-    throw new Error(
-      "NERU web requires cross-origin isolation (COOP same-origin and COEP require-corp)",
-    );
+    throw new Error("NERU web requires cross-origin isolation (COOP same-origin and COEP require-corp)");
   }
-  if (typeof SharedArrayBuffer !== "function") {
-    throw new Error("NERU web requires SharedArrayBuffer support");
-  }
+  if (typeof SharedArrayBuffer !== "function") throw new Error("NERU web requires SharedArrayBuffer support");
 
   installArrayBufferTransfer();
   const plan = planNeruBrowserBoot(options);
   const fetcher = options.fetcher ?? fetch;
+  const sharedClient = new FetchSharedFsClient(plan.sharedFs, {
+    clientId: `neru-web-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`,
+    leaseTtlMs: 300_000,
+    ...(options.sharedFsToken ? { token: options.sharedFsToken } : {}),
+    fetcher,
+  });
+  await sharedClient.connect();
+  const shared = await sharedClient.snapshot();
+  options.log?.(`authoritative userspace generation ${shared.generation}`);
+  const fsBridge = new NeruLinuxFsBridge(sharedClient);
+
   const [runtime, kernelResponse, initramfsResponse] = await Promise.all([
     options.runtime ?? loadNeruLinuxBrowserRuntime(plan.runtimeUrl, fetcher),
     fetcher(plan.kernelUrl, { cache: "no-store" }),
@@ -129,9 +144,7 @@ export async function bootNeruBrowser(
   if (!kernelResponse.ok) throw new Error(`${plan.kernelUrl.pathname}: HTTP ${kernelResponse.status}`);
   if (!initramfsResponse.ok) throw new Error(`${plan.initramfsUrl.pathname}: HTTP ${initramfsResponse.status}`);
 
-  const kernel = await (options.compileKernel ?? WebAssembly.compile)(
-    await kernelResponse.arrayBuffer(),
-  );
+  const kernel = await (options.compileKernel ?? WebAssembly.compile)(await kernelResponse.arrayBuffer());
   const machine = await runtime(
     plan.workerUrl.href,
     plan.variant,
@@ -140,15 +153,16 @@ export async function bootNeruBrowser(
     await initramfsResponse.arrayBuffer(),
     options.log ?? (() => {}),
     options.write ?? (() => {}),
+    request => fsBridge.call(Uint8Array.from(request)),
   );
 
   let active = true;
   return {
-    keyInput(data: string): void {
-      if (active) machine.key_input(data);
-    },
+    keyInput(data: string): void { if (active) machine.key_input(data); },
     terminate(): void {
+      if (!active) return;
       active = false;
+      void fsBridge.close().finally(() => sharedClient.close());
     },
   };
 }

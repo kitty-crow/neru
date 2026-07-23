@@ -2,6 +2,8 @@ export { decideSharedBoot } from "./boot-policy.js";
 export { NodeCheckpointStore } from "./checkpoint.js";
 export { FetchSharedFsClient } from "./client.js";
 export { NeruFsBridge, NERU_FS_BRIDGE_SCHEMA } from "./bridge.js";
+export { NeruBinaryFsBridge, NeruFsOpcode, encodeSnapshot } from "./binary-bridge.js";
+export { NeruLinuxFsBridge } from "./linux-bridge.js";
 export { AuthoritativeFilesystem, MemoryPersistence, snapshotState, stateFromSnapshot } from "./core.js";
 export { startSharedFsDaemon } from "./daemon.js";
 export { NodeJournalPersistence } from "./node-persistence.js";

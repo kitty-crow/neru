@@ -6,7 +6,7 @@
   "type": "module",
   "author": {"name": "Kitty Crow", "url": "https://kittycrow.dev"},
   "scripts": {
-    "build": "tsc -p tsconfig.json && node --check bin/neru-linux-runtime.mjs && node --check runtime/node-worker-bootstrap.mjs && python3 -m py_compile scripts/prepare-userland.py",
+    "build": "tsc -p tsconfig.json && node --check bin/neru-linux-runtime.mjs && node --check runtime/node-worker-bootstrap.mjs && python3 -m py_compile scripts/prepare-userland.py scripts/patch-linux-runtime.py",
     "build:linux": "bash scripts/build-linux.sh",
     "build:image": "bun neru.ts",
     "fs": "node dist/src/fs/daemon-cli.js",

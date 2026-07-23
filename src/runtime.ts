@@ -67,6 +67,11 @@ export function planNeruBoot(options: NeruBootOptions = {}): NeruBootPlan {
   const executable = resolveLinuxRuntime(options.linuxRuntime);
   const kernel = resolve(options.kernel ?? artefacts.kernel);
   const initramfs = resolve(options.initramfs ?? artefacts.initramfs);
+  const sharedFs = options.sharedFs ?? process.env.MIKUOS_FS_URL;
+  if (!sharedFs) {
+    throw new Error("NERU requires an authoritative mikuOS filesystem endpoint; refusing a divergent writable boot");
+  }
+  const sharedFsToken = options.sharedFsToken ?? process.env.MIKUOS_FS_TOKEN;
   return {
     executable,
     argv: [
@@ -74,13 +79,25 @@ export function planNeruBoot(options: NeruBootOptions = {}): NeruBootPlan {
       kernel,
       "--initramfs",
       initramfs,
-      "--init",
-      "/init",
+      "--runtime",
+      artefacts.browserRuntime,
+      "--worker",
+      artefacts.browserWorker,
+      "--shared-fs",
+      sharedFs,
+      ...(sharedFsToken ? ["--shared-fs-token", sharedFsToken] : []),
       ...(options.argv ?? []),
     ],
-    environment: cleanEnvironment(options.environment ?? {}),
+    environment: cleanEnvironment({
+      ...(options.environment ?? {}),
+      MIKUOS_FS_URL: sharedFs,
+      ...(sharedFsToken ? { MIKUOS_FS_TOKEN: sharedFsToken } : {}),
+    }),
     kernel,
     initramfs,
+    browserRuntime: artefacts.browserRuntime,
+    browserWorker: artefacts.browserWorker,
+    sharedFs,
   };
 }
 
@@ -91,10 +108,15 @@ export async function probeNeru(
   await access(plan.executable, constants.X_OK);
   await access(plan.kernel, constants.R_OK);
   await access(plan.initramfs, constants.R_OK);
+  await access(plan.browserRuntime, constants.R_OK);
+  await access(plan.browserWorker, constants.R_OK);
   return {
     executable: plan.executable,
     kernel: plan.kernel,
     initramfs: plan.initramfs,
+    browserRuntime: plan.browserRuntime,
+    browserWorker: plan.browserWorker,
+    sharedFs: plan.sharedFs,
   };
 }
 

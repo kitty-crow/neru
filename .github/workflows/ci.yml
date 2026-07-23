@@ -15,6 +15,13 @@ jobs:
         with:
           submodules: false
 
+      - name: Compile the Linux FUSE mount client with strict warnings
+        run: |
+          if ! cc -std=gnu17 -Wall -Wextra -Wpedantic -Werror -c src/nerufs.c -o /tmp/nerufs.o 2>/tmp/nerufs-errors; then
+            cat /tmp/nerufs-errors
+            exit 1
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -24,10 +31,32 @@ jobs:
           python-version: "3.x"
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --silent
 
-      - name: Test image orchestration and host adapters
-        run: npm test
+      - name: Compile TypeScript and validate scripts
+        run: npm run build
+
+      - name: Run Python image tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
+      - name: Run Node authority and host-adapter tests
+        run: node --test dist/tests/*.test.js
+
+      - name: Validate the pinned Linux-WASM runtime patcher
+        run: |
+          mkdir -p /tmp/linux-wasm-runtime /tmp/neru-runtime
+          curl --fail --location --silent --show-error \
+            https://raw.githubusercontent.com/joelseverin/linux-wasm/3103d5c877a8f6251b4b451c866a46941fd1fab3/runtime/linux.js \
+            --output /tmp/linux-wasm-runtime/linux.js
+          curl --fail --location --silent --show-error \
+            https://raw.githubusercontent.com/joelseverin/linux-wasm/3103d5c877a8f6251b4b451c866a46941fd1fab3/runtime/linux-worker.js \
+            --output /tmp/linux-wasm-runtime/linux-worker.js
+          python3 scripts/patch-linux-runtime.py \
+            --linux /tmp/linux-wasm-runtime/linux.js \
+            --worker /tmp/linux-wasm-runtime/linux-worker.js \
+            --output /tmp/neru-runtime
+          node --check /tmp/neru-runtime/linux.js
+          node --check /tmp/neru-runtime/linux-worker.js
 
       - name: Check shell scripts
         run: bash -n scripts/*.sh
