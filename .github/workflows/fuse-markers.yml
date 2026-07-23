@@ -1,0 +1,53 @@
+name: FUSE diagnostic markers
+
+on:
+  push:
+    branches:
+      - validation/shared-userspace
+
+permissions:
+  contents: write
+
+jobs:
+  mark:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Compile and mark diagnostic categories
+        run: |
+          set +e
+          cc -std=gnu17 -Wall -Wextra -Wpedantic -Werror -c src/nerufs.c -o /tmp/nerufs.o 2>/tmp/errors
+          status=$?
+          set -e
+          rm -rf .fuse-diagnostics
+          mkdir -p .fuse-diagnostics
+          grep -q 'FUSE_POSIX_LOCKS' /tmp/errors && : > .fuse-diagnostics/FUSE_POSIX_LOCKS || true
+          grep -q 'FUSE_AUTO_INVAL_DATA' /tmp/errors && : > .fuse-diagnostics/FUSE_AUTO_INVAL_DATA || true
+          grep -q 'FUSE_DONT_MASK' /tmp/errors && : > .fuse-diagnostics/FUSE_DONT_MASK || true
+          grep -q 'FUSE_BIG_WRITES' /tmp/errors && : > .fuse-diagnostics/FUSE_BIG_WRITES || true
+          grep -q 'FUSE_RENAME2' /tmp/errors && : > .fuse-diagnostics/FUSE_RENAME2 || true
+          grep -q 'fuse_rename2_in' /tmp/errors && : > .fuse-diagnostics/fuse_rename2_in || true
+          grep -q 'FUSE_SETLKW' /tmp/errors && : > .fuse-diagnostics/FUSE_SETLKW || true
+          grep -q 'FUSE_GETLK' /tmp/errors && : > .fuse-diagnostics/FUSE_GETLK || true
+          grep -q 'fuse_lk_in' /tmp/errors && : > .fuse-diagnostics/fuse_lk_in || true
+          grep -q 'fuse_lk_out' /tmp/errors && : > .fuse-diagnostics/fuse_lk_out || true
+          grep -q 'FUSE_NAME_OFFSET' /tmp/errors && : > .fuse-diagnostics/FUSE_NAME_OFFSET || true
+          grep -q 'FUSE_DIRENT_ALIGN' /tmp/errors && : > .fuse-diagnostics/FUSE_DIRENT_ALIGN || true
+          grep -q 'no member named' /tmp/errors && : > .fuse-diagnostics/no_member || true
+          grep -q 'undeclared' /tmp/errors && : > .fuse-diagnostics/undeclared || true
+          grep -q 'implicit declaration' /tmp/errors && : > .fuse-diagnostics/implicit_declaration || true
+          grep -q 'unused' /tmp/errors && : > .fuse-diagnostics/unused || true
+          grep -q 'incompatible' /tmp/errors && : > .fuse-diagnostics/incompatible || true
+          grep -q 'error:' /tmp/errors && : > .fuse-diagnostics/has_error || true
+          printf '%s\n' "$status" > .fuse-diagnostics/status
+          git config user.name 'NERU validation'
+          git config user.email 'validation@users.noreply.github.com'
+          git add .fuse-diagnostics
+          if ! git diff --cached --quiet; then
+            git commit -m 'Record temporary FUSE diagnostic markers'
+            git push origin HEAD:refs/heads/validation/shared-userspace
+          fi
+          exit 0
