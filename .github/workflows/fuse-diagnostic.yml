@@ -1,0 +1,34 @@
+name: FUSE diagnostic
+
+on:
+  push:
+    branches:
+      - validation/shared-userspace
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Compile and report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          cc -std=gnu17 -Wall -Wextra -Wpedantic -Werror -c src/nerufs.c -o /tmp/nerufs.o 2>/tmp/errors
+          status=$?
+          set -e
+          if [[ $status -eq 0 ]]; then
+            printf 'FUSE client compiles cleanly.\n' >/tmp/errors
+          fi
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "TEMP FUSE diagnostic ${GITHUB_SHA:0:12}" \
+            --body-file /tmp/errors
+          exit $status
