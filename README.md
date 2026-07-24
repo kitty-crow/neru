@@ -2,56 +2,93 @@
 
 NERU: Neru Executes a RUntime
 
-NERU is the ahead-of-time Linux-WASM image builder and kernel-integration
-layer for Thistle systems. It builds the Linux kernel, initramfs, NEMUNEMU
-compatibility environment and immutable recovery checkpoint used by both CLI
-and web hosts.
+NERU is the Linux-WASM kernel integration layer for Thistle systems. It boots a
+fixed Linux runtime and attaches the same authoritative userspace used by other
+kernels. It does not create or maintain a second mikuOS installation.
 
-NERU does **not** create or maintain a second mikuOS installation. Thistle,
-Teto and NERU/Linux attach the same authoritative persistent userspace through
-the operation-level service documented in `docs/SHARED_USERSPACE.md`.
+## Architecture
 
-## Authoritative userspace
+```text
+                   authoritative userspace service
+                     generation + transaction log
+                    /             |              \
+             Thistle Tree     Teto Tree       NERU bridge
+                                                   |
+                                             Linux mikuosfs
+                                                   |
+                                              NEMUNEMU
+```
+
+The fixed NERU runtime contains only Linux, a minimal initramfs, NEMUNEMU,
+BusyBox recovery tools and the host runtime. Persistent mikuOS paths are mounted
+live from the filesystem authority. `/dev`, `/proc`, `/sys`, `/run` and `/tmp`
+remain local to the active Linux session.
+
+## Build the fixed runtime
+
+```bash
+git submodule update --init --recursive
+npm install
+npm run build
+npm run build:runtime
+```
+
+The default output is:
+
+```text
+dist/neru-runtime-wasm32_nommu/
+```
+
+It contains `vmlinux.wasm`, the fixed runtime `initramfs.cpio.gz`, browser
+runtime files and a manifest. The manifest explicitly records that no mikuOS
+userspace is embedded.
+
+## Boot with a live filesystem authority
+
+```bash
+bun neru.ts \
+  --artifact-root dist/neru-runtime-wasm32_nommu \
+  --fs-endpoint http://127.0.0.1:3940 \
+  --boot \
+  --skip-build
+```
+
+The host-side authority and operation protocol already exist under `src/fs`.
+The remaining implementation step is the Linux guest bridge and `mikuosfs`
+mount path. Until that bridge is installed, the fixed runtime boots to a clear
+`NERU_LIVE_BRIDGE_MISSING` recovery shell rather than fabricating a writable
+copy of the userspace.
+
+## Original proof of concept
+
+The original architecture copied `.thistle.base` into a newly generated
+initramfs and successfully exercised the Linux-WASM build, NEMUNEMU packaging
+and real-kernel boot path. It is retained only as a proof of concept and
+regression tool:
+
+```bash
+bun neru.ts \
+  --poc-image \
+  --userland /path/to/mikuOS/.thistle.base \
+  --output dist/neru-poc-wasm32_nommu
+```
+
+That path is not the production architecture. Runtime writes must never be
+written back into a packaged checkpoint image.
+
+## Filesystem authority
 
 Run a local authority with durable journalling:
 
 ```bash
-npm install
 npm run build
 npm run fs -- --store /path/to/mikuos-userspace
 ```
 
 The service publishes monotonically increasing generations, per-inode conflict
 checks, atomic rename, leases, advisory locks, durable commit markers and crash
-recovery. A remote endpoint provides the same contract to browser sessions and
-other machines.
-
-## Build an image
-
-```bash
-git submodule update --init --recursive
-npm install
-npm run build
-bun neru.ts --userland /path/to/mikuOS/.thistle.base --output dist/neru-wasm32_nommu
-```
-
-The supplied userland is used as an immutable base/checkpoint. Runtime writes
-must go to the authoritative service, never back into the checkpoint image.
-The output directory contains `vmlinux.wasm`, `initramfs.cpio.gz`, the browser
-runtime/worker and a manifest carrying the checkpoint generation and checksum.
-
-Selecting NERU from mikuOS performs this ahead-of-time build before CLI boot.
-A web deployment performs the same build during asset generation. CLI and web
-consume the same kernel and initramfs artefacts; only their host adapters
-differ.
-
-## Boot policy
-
-NERU compares the image generation with the authoritative filesystem
-generation and mounts the live state over the immutable base. If the authority
-is unavailable, the default is to fail clearly rather than create a divergent
-writable installation. Read-only checkpoint and recovery modes must be chosen
-explicitly.
+recovery. Browser and remote sessions use the same protocol through an
+authoritative endpoint.
 
 NEMUNEMU owns THX loading, Thistle execution and ABI translation. NERU owns the
 Linux-visible shared mount so native Linux-WASM and THX processes see the same
