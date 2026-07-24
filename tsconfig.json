@@ -9,7 +9,9 @@
     "outDir": "dist",
     "rootDir": ".",
     "declaration": true,
-    "lib": ["ES2022", "DOM"]
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "typeRoots": ["./node_modules/@types"]
   },
   "include": ["neru.ts", "src/**/*.ts", "tests/**/*.ts"]
 }
