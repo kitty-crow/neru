@@ -9,13 +9,19 @@ export interface NeruArtifactPaths {
   manifest: string;
 }
 
-export interface NeruBuildOptions {
-  userland: string;
+export interface NeruRuntimeBuildOptions {
   output?: string;
   variant?: NeruVariant;
   workspace?: string;
   rebuildLinux?: boolean;
 }
+
+export interface NeruPocImageBuildOptions extends NeruRuntimeBuildOptions {
+  userland: string;
+}
+
+/** @deprecated Use NeruPocImageBuildOptions for the legacy embedded-userspace image. */
+export type NeruBuildOptions = NeruPocImageBuildOptions;
 
 export interface NeruBootOptions {
   artifactRoot?: string;
@@ -24,6 +30,9 @@ export interface NeruBootOptions {
   initramfs?: string;
   argv?: string[];
   environment?: Record<string, string>;
+  filesystemEndpoint?: string;
+  filesystemToken?: string;
+  filesystemClientId?: string;
 }
 
 export interface NeruBootPlan {
