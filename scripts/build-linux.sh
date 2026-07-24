@@ -14,7 +14,7 @@ UPSTREAM="$LINUX_WASM/linux-wasm.sh"
 export LW_VARIANT="${LW_VARIANT:-wasm32_nommu}"
 export LW_WORKSPACE="${LW_WORKSPACE:-$LINUX_WASM/workspace}"
 
-ACTION="${1:-build-os}"
+ACTION="${1:-build-runtime}"
 SOURCE_ROOT="$LW_WORKSPACE/src"
 INSTALL_ROOT="$LW_WORKSPACE/install"
 FETCH_RETRIES="${NERU_FETCH_RETRIES:-3}"
@@ -126,22 +126,34 @@ fetch_component() {
     return 1
 }
 
-prepare_sources() {
+prepare_kernel_sources() {
     fetch_component llvm
     fetch_component kernel
+}
+
+prepare_os_sources() {
+    prepare_kernel_sources
     fetch_component musl
     fetch_component busybox
 }
 
+build_tools_if_needed() {
+    if [[ ! -x "$INSTALL_ROOT/llvm/bin/clang" ]]; then
+        printf '\n===== Build Linux-WASM LLVM toolchain =====\n'
+        "$UPSTREAM" build-tools
+    fi
+}
+
 case "$ACTION" in
+    build-runtime|build-kernel-only)
+        prepare_kernel_sources
+        build_tools_if_needed
+        printf '\n===== Build Linux-WASM kernel only =====\n'
+        exec "$UPSTREAM" build-kernel
+        ;;
     all|build-os)
-        prepare_sources
-
-        if [[ ! -x "$INSTALL_ROOT/llvm/bin/clang" ]]; then
-            printf '\n===== Build Linux-WASM LLVM toolchain =====\n'
-            "$UPSTREAM" build-tools
-        fi
-
+        prepare_os_sources
+        build_tools_if_needed
         printf '\n===== Build Linux-WASM operating-system components =====\n'
         exec "$UPSTREAM" build-os
         ;;
