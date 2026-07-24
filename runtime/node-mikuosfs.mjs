@@ -4,7 +4,6 @@ import {
   closeSync,
   lstatSync,
   openSync,
-  readFileSync,
   readSync,
   readdirSync,
   readlinkSync,
@@ -22,20 +21,27 @@ const ERRNO = Object.freeze({
   EPERM: -1,
 });
 
+const decoder = new TextDecoder("utf-8");
+
 const errorCode = (error) => {
   const code = error && typeof error === "object" ? error.code : undefined;
   return ERRNO[code] ?? ERRNO.EIO;
 };
 
-const cstring = (memory, pointer) => {
+const cstring = (memory, pointerValue) => {
+  const pointer = Number(pointerValue);
   const bytes = new Uint8Array(memory.buffer);
   let end = pointer;
   while (end < bytes.length && bytes[end] !== 0) end++;
-  if (end === bytes.length) throw Object.assign(new Error("unterminated guest path"), { code: "ENAMETOOLONG" });
-  return new TextDecoder().decode(bytes.subarray(pointer, end));
+  if (end === bytes.length) {
+    throw Object.assign(new Error("unterminated guest path"), { code: "ENAMETOOLONG" });
+  }
+  return decoder.decode(bytes.subarray(pointer, end));
 };
 
-const writeBytes = (memory, pointer, capacity, source) => {
+const writeBytes = (memory, pointerValue, capacityValue, source) => {
+  const pointer = Number(pointerValue);
+  const capacity = Number(capacityValue);
   if (source.length >= capacity) return ERRNO.ENAMETOOLONG;
   const target = new Uint8Array(memory.buffer, pointer, capacity);
   target.set(source);
@@ -72,6 +78,7 @@ export function createNodeMikuosFs(rootValue) {
 
   const lstatPath = (guestPath) => {
     const candidate = lexical(guestPath);
+    if (candidate === root) return candidate;
     const parent = realpathSync.native(dirname(candidate));
     if (!inside(root, parent)) {
       throw Object.assign(new Error("guest parent escapes root"), { code: "EACCES" });
@@ -79,7 +86,7 @@ export function createNodeMikuosFs(rootValue) {
     return candidate;
   };
 
-  const guestLink = (hostPath, target) => {
+  const guestLink = (target) => {
     if (!isAbsolute(target)) return target;
     const resolved = resolve(target);
     if (!inside(root, resolved)) return target;
@@ -134,8 +141,8 @@ export function createNodeMikuosFs(rootValue) {
         if (index >= entries.length) return 0;
         return writeBytes(
           memory,
-          Number(bufferPointer),
-          Number(countValue),
+          bufferPointer,
+          countValue,
           encoder.encode(entries[index]),
         );
       } catch (error) {
@@ -146,12 +153,11 @@ export function createNodeMikuosFs(rootValue) {
     readlink(memory, pathPointer, bufferPointer, countValue) {
       try {
         const path = lstatPath(cstring(memory, pathPointer));
-        const target = guestLink(path, readlinkSync(path, "utf8"));
         return writeBytes(
           memory,
-          Number(bufferPointer),
-          Number(countValue),
-          encoder.encode(target),
+          bufferPointer,
+          countValue,
+          encoder.encode(guestLink(readlinkSync(path, "utf8"))),
         );
       } catch (error) {
         return errorCode(error);
