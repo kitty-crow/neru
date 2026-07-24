@@ -21,10 +21,12 @@ ROOTFS="$(realpath -m "$ROOTFS")"
 }
 
 NEMUNEMU_BINARY="$ROOT/dist/nemunemu-$VARIANT.wasm"
+BUSYBOX_SOURCE="$WORKSPACE/src/busybox"
 BUSYBOX_BINARY="$WORKSPACE/install/busybox-$VARIANT/bin/busybox"
-BUSYBOX_SOURCE_CONFIG="$WORKSPACE/src/busybox/configs/wasm_defconfig"
+BUSYBOX_SOURCE_CONFIG="$BUSYBOX_SOURCE/configs/wasm_defconfig"
 BUSYBOX_BUILD_CONFIG="$WORKSPACE/build/busybox-$VARIANT/.config"
-BUSYBOX_PROFILE_MARKER="$WORKSPACE/install/busybox-$VARIANT/.neru-pid1-shell-v2"
+BUSYBOX_TERMINAL_PATCH="$ROOT/patches/busybox/0001-neru-keep-hush-on-parent-terminal.patch"
+BUSYBOX_PROFILE_MARKER="$WORKSPACE/install/busybox-$VARIANT/.neru-pid1-shell-v3"
 
 [[ -x "$NEMUNEMU/scripts/build-linux-wasm.sh" ]] || {
     printf 'ERROR: NEMUNEMU submodule is not initialised.\n' >&2
@@ -43,12 +45,18 @@ NEMUNEMU_WASM_OUTPUT="$NEMUNEMU_BINARY" \
     exit 1
 }
 
+busybox_terminal_patch_applied() {
+    git -C "$BUSYBOX_SOURCE" apply --reverse --check "$BUSYBOX_TERMINAL_PATCH" \
+        >/dev/null 2>&1
+}
+
 busybox_profile_ready() {
     [[ -f "$BUSYBOX_BINARY" && -f "$BUSYBOX_PROFILE_MARKER" && -f "$BUSYBOX_BUILD_CONFIG" ]] || return 1
     grep -qx '# CONFIG_FEATURE_PREFER_APPLETS is not set' "$BUSYBOX_BUILD_CONFIG" || return 1
     grep -qx '# CONFIG_FEATURE_SH_STANDALONE is not set' "$BUSYBOX_BUILD_CONFIG" || return 1
     grep -qx '# CONFIG_FEATURE_SH_NOFORK is not set' "$BUSYBOX_BUILD_CONFIG" || return 1
-    grep -qx '# CONFIG_HUSH_JOB is not set' "$BUSYBOX_BUILD_CONFIG" || return 1
+    grep -qx 'CONFIG_HUSH_JOB=y' "$BUSYBOX_BUILD_CONFIG" || return 1
+    busybox_terminal_patch_applied || return 1
 }
 
 if ! busybox_profile_ready; then
@@ -57,8 +65,12 @@ if ! busybox_profile_ready; then
         printf 'The existing proof-of-concept workspace must contain fetched BusyBox sources.\n' >&2
         exit 1
     }
+    [[ -f "$BUSYBOX_TERMINAL_PATCH" ]] || {
+        printf 'ERROR: Neru BusyBox terminal patch is missing: %s\n' "$BUSYBOX_TERMINAL_PATCH" >&2
+        exit 1
+    }
 
-    printf '\n===== Configure PID 1-safe Linux-WASM BusyBox =====\n'
+    printf '\n===== Restore bootable Linux-WASM BusyBox feature layout =====\n'
     python3 - "$BUSYBOX_SOURCE_CONFIG" <<'PY'
 from pathlib import Path
 import sys
@@ -66,15 +78,14 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 
-# WebAssembly NOMMU currently cannot safely use BusyBox's indirect NOFORK
-# applet dispatch: it can trap with an out-of-bounds function-table index.
-# Disabling hush job control is still required so the shell never hands the
-# terminal to a child process and leaves the host shell in the foreground.
+# Keep the feature layout used by the known-bootable upstream binary. Changing
+# this matrix alters Wasm indirect-function tables and can make PID 1 trap before
+# the shell prompt. Terminal ownership is fixed in source instead.
 settings = {
     "CONFIG_FEATURE_PREFER_APPLETS": False,
     "CONFIG_FEATURE_SH_STANDALONE": False,
     "CONFIG_FEATURE_SH_NOFORK": False,
-    "CONFIG_HUSH_JOB": False,
+    "CONFIG_HUSH_JOB": True,
 }
 
 lines = text.splitlines()
@@ -89,15 +100,39 @@ for name, enabled in settings.items():
 path.write_text(text, encoding="utf-8")
 PY
 
-    rm -f \
-        "$WORKSPACE/install/busybox-$VARIANT/.neru-pid1-shell-v1" \
-        "$BUSYBOX_PROFILE_MARKER"
+    printf '\n===== Apply Neru terminal-ownership patch =====\n'
+    if busybox_terminal_patch_applied; then
+        printf 'BusyBox terminal patch is already applied.\n'
+    elif git -C "$BUSYBOX_SOURCE" apply --check "$BUSYBOX_TERMINAL_PATCH"; then
+        git -C "$BUSYBOX_SOURCE" apply "$BUSYBOX_TERMINAL_PATCH"
+    else
+        printf 'ERROR: Neru BusyBox terminal patch cannot be applied cleanly.\n' >&2
+        exit 1
+    fi
+
+    printf '\n===== Clean-build PID 1-safe Linux-WASM BusyBox =====\n'
+    rm -rf \
+        "$WORKSPACE/build/busybox-$VARIANT" \
+        "$WORKSPACE/install/busybox-$VARIANT"
+
     LW_WORKSPACE="$WORKSPACE" \
     LW_VARIANT="$VARIANT" \
         "$LINUX_WASM/linux-wasm.sh" build-busybox
 
     [[ -f "$BUSYBOX_BINARY" ]] || {
-        printf 'ERROR: PID 1-safe BusyBox build did not produce %s\n' "$BUSYBOX_BINARY" >&2
+        printf 'ERROR: Clean BusyBox build did not produce %s\n' "$BUSYBOX_BINARY" >&2
+        exit 1
+    }
+    [[ -f "$BUSYBOX_BUILD_CONFIG" ]] || {
+        printf 'ERROR: Clean BusyBox build did not produce %s\n' "$BUSYBOX_BUILD_CONFIG" >&2
+        exit 1
+    }
+    grep -qx 'CONFIG_HUSH_JOB=y' "$BUSYBOX_BUILD_CONFIG" || {
+        printf 'ERROR: Clean BusyBox build did not retain CONFIG_HUSH_JOB=y.\n' >&2
+        exit 1
+    }
+    busybox_terminal_patch_applied || {
+        printf 'ERROR: BusyBox terminal patch is not present after rebuilding.\n' >&2
         exit 1
     }
     touch "$BUSYBOX_PROFILE_MARKER"
