@@ -28,14 +28,12 @@ BUSYBOX_BINARY="$WORKSPACE/install/busybox-$VARIANT/bin/busybox"
     exit 1
 }
 
-if [[ ! -f "$NEMUNEMU_BINARY" ]]; then
-    printf '\n===== Build NEMUNEMU for Linux-WASM =====\n'
-    LINUX_WASM_ROOT="$LINUX_WASM" \
-    LW_WORKSPACE="$WORKSPACE" \
-    LW_VARIANT="$VARIANT" \
-    NEMUNEMU_WASM_OUTPUT="$NEMUNEMU_BINARY" \
-        "$NEMUNEMU/scripts/build-linux-wasm.sh"
-fi
+printf '\n===== Build current NEMUNEMU for Linux-WASM =====\n'
+LINUX_WASM_ROOT="$LINUX_WASM" \
+LW_WORKSPACE="$WORKSPACE" \
+LW_VARIANT="$VARIANT" \
+NEMUNEMU_WASM_OUTPUT="$NEMUNEMU_BINARY" \
+    "$NEMUNEMU/scripts/build-linux-wasm.sh"
 
 [[ -f "$NEMUNEMU_BINARY" ]] || {
     printf 'ERROR: NEMUNEMU build did not produce %s\n' "$NEMUNEMU_BINARY" >&2
