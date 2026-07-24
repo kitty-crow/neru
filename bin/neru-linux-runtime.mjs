@@ -31,7 +31,7 @@ if (args.includes("--help")) {
       "[--initramfs PATH] [--variant wasm32_nommu|wasm64_nommu] [--cmdline TEXT]\n" +
       "\n" +
       "The normal NERU path uses no initramfs. Linux mounts mikuosfs as / and " +
-      "executes /sbin/nemunemu from the live mikuOS userspace.\n",
+      "executes /sbin/nemunemu from the selected live mikuOS root.\n",
   );
   process.exit(0);
 }
@@ -45,12 +45,28 @@ if (variant !== "wasm32_nommu" && variant !== "wasm64_nommu") {
   throw new Error(`Unsupported Linux-WASM variant: ${variant}`);
 }
 
+const filesystemRoot = process.env.NERU_FS_ROOT;
 const filesystemEndpoint = process.env.NERU_FS_ENDPOINT;
-if (!initramfsPath && !filesystemEndpoint) {
+if (!initramfsPath && !filesystemRoot && !filesystemEndpoint) {
   throw new Error(
-    "Kernel-only NERU boot requires NERU_FS_ENDPOINT so mikuosfs can mount the live userspace",
+    "Kernel-only NERU boot requires NERU_FS_ROOT or NERU_FS_ENDPOINT so mikuosfs can mount the live userspace",
   );
 }
+
+const filesystem = initramfsPath
+  ? null
+  : filesystemRoot
+    ? {
+        kind: "directory",
+        root: filesystemRoot,
+        clientId: process.env.NERU_FS_CLIENT_ID,
+      }
+    : {
+        kind: "authority",
+        endpoint: filesystemEndpoint,
+        token: process.env.NERU_FS_TOKEN,
+        clientId: process.env.NERU_FS_CLIENT_ID,
+      };
 
 class WorkerAdapter {
   #worker;
@@ -63,13 +79,7 @@ class WorkerAdapter {
       name: options.name,
       workerData: {
         upstreamWorker: UPSTREAM_WORKER,
-        filesystem: filesystemEndpoint
-          ? {
-              endpoint: filesystemEndpoint,
-              token: process.env.NERU_FS_TOKEN,
-              clientId: process.env.NERU_FS_CLIENT_ID,
-            }
-          : null,
+        filesystem,
       },
       type: "module",
     });
