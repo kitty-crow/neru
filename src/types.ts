@@ -32,6 +32,9 @@ export interface NeruBootOptions {
   initramfs?: string;
   argv?: string[];
   environment?: Record<string, string>;
+  /** Exact local mikuOS root selected by the Thistle/Teto host. */
+  filesystemRoot?: string;
+  /** Optional remote or shared authority endpoint. */
   filesystemEndpoint?: string;
   filesystemToken?: string;
   filesystemClientId?: string;
