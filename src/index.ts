@@ -1,4 +1,4 @@
-export { buildNeruImage } from "./build.js";
+export { buildNeruImage, buildNeruRuntime } from "./build.js";
 export {
   artifactPaths,
   bootNeru,
@@ -19,7 +19,9 @@ export type {
   NeruBootOptions,
   NeruBootPlan,
   NeruBuildOptions,
+  NeruPocImageBuildOptions,
   NeruProbeResult,
+  NeruRuntimeBuildOptions,
   NeruVariant,
 } from "./types.js";
 export type {
