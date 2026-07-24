@@ -30,7 +30,7 @@ export function resolveArtifactRoot(explicit?: string): string {
   const configured = explicit ?? process.env.NERU_ARTIFACT_ROOT;
   return configured
     ? resolve(configured)
-    : join(packageRoot, "dist", `neru-${neruVariant()}`);
+    : join(packageRoot, "dist", `neru-runtime-${neruVariant()}`);
 }
 
 export function artifactPaths(root = resolveArtifactRoot()): NeruArtifactPaths {
@@ -67,6 +67,10 @@ export function planNeruBoot(options: NeruBootOptions = {}): NeruBootPlan {
   const executable = resolveLinuxRuntime(options.linuxRuntime);
   const kernel = resolve(options.kernel ?? artefacts.kernel);
   const initramfs = resolve(options.initramfs ?? artefacts.initramfs);
+  const bridgeEnvironment: Record<string, string> = {};
+  if (options.filesystemEndpoint) bridgeEnvironment.NERU_FS_ENDPOINT = options.filesystemEndpoint;
+  if (options.filesystemToken) bridgeEnvironment.NERU_FS_TOKEN = options.filesystemToken;
+  if (options.filesystemClientId) bridgeEnvironment.NERU_FS_CLIENT_ID = options.filesystemClientId;
   return {
     executable,
     argv: [
@@ -78,7 +82,10 @@ export function planNeruBoot(options: NeruBootOptions = {}): NeruBootPlan {
       "/init",
       ...(options.argv ?? []),
     ],
-    environment: cleanEnvironment(options.environment ?? {}),
+    environment: cleanEnvironment({
+      ...bridgeEnvironment,
+      ...(options.environment ?? {}),
+    }),
     kernel,
     initramfs,
   };
