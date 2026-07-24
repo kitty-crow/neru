@@ -137,6 +137,12 @@ prepare_os_sources() {
     fetch_component busybox
 }
 
+prepare_neru_kernel() {
+    python3 "$ROOT/scripts/prepare-kernel.py" \
+        --kernel "$SOURCE_ROOT/kernel" \
+        --source "$ROOT/kernel/mikuosfs.c"
+}
+
 build_tools_if_needed() {
     if [[ ! -x "$INSTALL_ROOT/llvm/bin/clang" ]]; then
         printf '\n===== Build Linux-WASM LLVM toolchain =====\n'
@@ -147,12 +153,14 @@ build_tools_if_needed() {
 case "$ACTION" in
     build-runtime|build-kernel-only)
         prepare_kernel_sources
+        prepare_neru_kernel
         build_tools_if_needed
-        printf '\n===== Build Linux-WASM kernel only =====\n'
+        printf '\n===== Build Linux-WASM kernel with mikuosfs =====\n'
         exec "$UPSTREAM" build-kernel
         ;;
     all|build-os)
         prepare_os_sources
+        prepare_neru_kernel
         build_tools_if_needed
         printf '\n===== Build Linux-WASM operating-system components =====\n'
         exec "$UPSTREAM" build-os
