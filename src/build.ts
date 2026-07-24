@@ -33,18 +33,16 @@ async function runBuilder(
   if (code !== 0) throw new Error(`${label} failed with status ${code}`);
 }
 
-async function verifyArtifacts(output: NeruArtifactPaths): Promise<NeruArtifactPaths> {
+async function verifyCommonArtifacts(output: NeruArtifactPaths): Promise<void> {
   await Promise.all([
     access(output.kernel, constants.R_OK),
-    access(output.initramfs, constants.R_OK),
     access(output.browserRuntime, constants.R_OK),
     access(output.browserWorker, constants.R_OK),
     access(output.manifest, constants.R_OK),
   ]);
-  return output;
 }
 
-/** Build the fixed NERU kernel runtime. It never packages a mikuOS userspace. */
+/** Build the kernel-only NERU runtime. It contains no initramfs or userspace. */
 export async function buildNeruRuntime(
   options: NeruRuntimeBuildOptions = {},
 ): Promise<NeruArtifactPaths> {
@@ -64,9 +62,10 @@ export async function buildNeruRuntime(
   await runBuilder(
     join(packageRoot, "scripts", "build-runtime.sh"),
     environment,
-    "NERU runtime build",
+    "NERU kernel-only runtime build",
   );
-  return await verifyArtifacts(output);
+  await verifyCommonArtifacts(output);
+  return output;
 }
 
 /**
@@ -97,5 +96,7 @@ export async function buildNeruImage(
     environment,
     "NERU proof-of-concept image build",
   );
-  return await verifyArtifacts(output);
+  await verifyCommonArtifacts(output);
+  await access(output.initramfs, constants.R_OK);
+  return output;
 }
