@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kitty Crow <https://kittycrow.dev>
+Date: Fri, 24 Jul 2026 22:15:00 +0100
+Subject: [PATCH] Keep Linux-WASM hush on the parent terminal
+
+Linux-WASM runs inside a host process which already owns the terminal. BusyBox
+hush job control hands that terminal to each child process with tcsetpgrp(), but
+the WebAssembly process boundary does not reliably hand it back. The host shell
+then becomes foreground while the guest shell remains alive.
+
+Keep HUSH_JOB compiled because the upstream Linux-WASM BusyBox build expects
+that feature layout, but suppress child process-group terminal handoff for Wasm.
+---
+ shell/hush.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/shell/hush.c b/shell/hush.c
+index c634ffa..1111111 100644
+--- a/shell/hush.c
++++ b/shell/hush.c
+@@ -9244,6 +9244,13 @@ static int run_pipe_child(void *arg) {
+ 	/* Every child adds itself to new process group
+ 		* with pgid == pid_of_first_child_in_pipe */
++#if defined(__wasm__)
++	/*
++	 * The host process owns the terminal. Moving it to a guest child process
++	 * leaves the host shell in the foreground after that child exits because
++	 * the Linux-WASM boundary cannot reliably restore the guest shell pgrp.
++	 */
++	if (0) {
++#else
+ 	if (G.run_list_level == 1 && G_interactive_fd) {
++#endif
+ 		pid_t pgrp;
+ 		pgrp = pi->pgrp;
+ 		if (pgrp < 0) /* true for 1st process only */
+-- 
+2.43.0
