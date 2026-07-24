@@ -10,7 +10,11 @@ export interface NeruBrowserBootOptions {
   runtimeUrl?: string | URL;
   workerUrl?: string | URL;
   kernelUrl?: string | URL;
+  /** Explicitly set only for the legacy proof-of-concept image. */
   initramfsUrl?: string | URL;
+  filesystemEndpoint?: string;
+  filesystemToken?: string;
+  filesystemClientId?: string;
   variant?: NeruVariant;
   commandLine?: string;
   log?: (message: string) => void;
@@ -25,7 +29,10 @@ export interface NeruBrowserBootPlan {
   runtimeUrl: URL;
   workerUrl: URL;
   kernelUrl: URL;
-  initramfsUrl: URL;
+  initramfsUrl?: URL;
+  filesystemEndpoint?: string;
+  filesystemToken?: string;
+  filesystemClientId?: string;
   variant: NeruVariant;
   commandLine: string;
 }
@@ -78,15 +85,23 @@ export function planNeruBrowserBoot(
     : new URL(document.baseURI);
   const base = absolute(options.base ?? "./neru/", documentBase);
   const variant = options.variant ?? "wasm32_nommu";
+  const initramfsUrl = options.initramfsUrl
+    ? absolute(options.initramfsUrl, base)
+    : undefined;
   return {
     runtimeUrl: absolute(options.runtimeUrl ?? "linux.js", base),
     workerUrl: absolute(options.workerUrl ?? "linux-worker.js", base),
     kernelUrl: absolute(options.kernelUrl ?? "vmlinux.wasm", base),
-    initramfsUrl: absolute(options.initramfsUrl ?? "initramfs.cpio.gz", base),
+    ...(initramfsUrl ? { initramfsUrl } : {}),
+    ...(options.filesystemEndpoint ? { filesystemEndpoint: options.filesystemEndpoint } : {}),
+    ...(options.filesystemToken ? { filesystemToken: options.filesystemToken } : {}),
+    ...(options.filesystemClientId ? { filesystemClientId: options.filesystemClientId } : {}),
     variant,
-    commandLine: options.commandLine ??
-      "maxcpus=3 nohz_full=0,2-63 rcu_nocbs=0,2-63 " +
-      "root=/dev/ram0 rootfstype=ramfs init=/init console=hvc console=ttyS0",
+    commandLine: options.commandLine ?? (
+      initramfsUrl
+        ? "maxcpus=1 root=/dev/ram0 rootfstype=ramfs init=/init console=hvc console=ttyS0"
+        : "maxcpus=1 root=mikuos rootfstype=mikuosfs rw init=/sbin/nemunemu console=hvc console=ttyS0"
+    ),
   };
 }
 
@@ -120,24 +135,41 @@ export async function bootNeruBrowser(
 
   installArrayBufferTransfer();
   const plan = planNeruBrowserBoot(options);
+  if (!plan.initramfsUrl && !plan.filesystemEndpoint) {
+    throw new Error("Kernel-only NERU web boot requires a live filesystem endpoint");
+  }
+  Object.defineProperty(globalThis, "__neruFilesystemConfig", {
+    configurable: true,
+    value: plan.filesystemEndpoint
+      ? {
+          kind: "authority",
+          endpoint: plan.filesystemEndpoint,
+          token: plan.filesystemToken,
+          clientId: plan.filesystemClientId,
+        }
+      : null,
+  });
+
   const fetcher = options.fetcher ?? fetch;
-  const [runtime, kernelResponse, initramfsResponse] = await Promise.all([
-    options.runtime ?? loadNeruLinuxBrowserRuntime(plan.runtimeUrl, fetcher),
-    fetcher(plan.kernelUrl, { cache: "no-store" }),
-    fetcher(plan.initramfsUrl, { cache: "no-store" }),
-  ]);
+  const runtimePromise = options.runtime ?? loadNeruLinuxBrowserRuntime(plan.runtimeUrl, fetcher);
+  const kernelResponse = await fetcher(plan.kernelUrl, { cache: "no-store" });
   if (!kernelResponse.ok) throw new Error(`${plan.kernelUrl.pathname}: HTTP ${kernelResponse.status}`);
-  if (!initramfsResponse.ok) throw new Error(`${plan.initramfsUrl.pathname}: HTTP ${initramfsResponse.status}`);
+  const initramfs = plan.initramfsUrl
+    ? await fetcher(plan.initramfsUrl, { cache: "no-store" }).then(async response => {
+        if (!response.ok) throw new Error(`${plan.initramfsUrl!.pathname}: HTTP ${response.status}`);
+        return await response.arrayBuffer();
+      })
+    : new ArrayBuffer(0);
 
   const kernel = await (options.compileKernel ?? WebAssembly.compile)(
     await kernelResponse.arrayBuffer(),
   );
-  const machine = await runtime(
+  const machine = await (await runtimePromise)(
     plan.workerUrl.href,
     plan.variant,
     kernel,
     plan.commandLine,
-    await initramfsResponse.arrayBuffer(),
+    initramfs,
     options.log ?? (() => {}),
     options.write ?? (() => {}),
   );
