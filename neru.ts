@@ -16,13 +16,14 @@ const option = (name: string): string | undefined => {
 
 if (args.includes("--help") || args.includes("-h")) {
   process.stdout.write(
-    "Usage: bun neru.ts [--output DIR] [--variant NAME] [--fs-endpoint URL] [--boot]\n" +
+    "Usage: bun neru.ts [--output DIR] [--variant NAME] --fs-root DIR [--boot]\n" +
+    "       bun neru.ts --artifact-root DIR --fs-root DIR --boot --skip-build\n" +
     "       bun neru.ts --artifact-root DIR --fs-endpoint URL --boot --skip-build\n" +
     "       bun neru.ts --artifact-root DIR --probe\n" +
     "       bun neru.ts --poc-image --userland DIR [--output DIR] [--boot]\n" +
     "\n" +
     "The default build contains only vmlinux.wasm and its host runtime. Linux mounts\n" +
-    "the live mikuOS userspace as mikuosfs and starts /sbin/nemunemu from that root.\n" +
+    "the selected mikuOS root as mikuosfs and starts /sbin/nemunemu from that root.\n" +
     "Use --poc-image only to reproduce the original embedded-userspace experiment.\n",
   );
   process.exit(0);
@@ -61,6 +62,7 @@ const bootOptions = {
   ...(pocImage && artifactRoot
     ? { initramfs: artifactPaths(artifactRoot).initramfs }
     : {}),
+  ...(option("--fs-root") ? { filesystemRoot: option("--fs-root")! } : {}),
   ...(option("--fs-endpoint") ? { filesystemEndpoint: option("--fs-endpoint")! } : {}),
   ...(option("--fs-token") ? { filesystemToken: option("--fs-token")! } : {}),
   ...(option("--fs-client-id") ? { filesystemClientId: option("--fs-client-id")! } : {}),
