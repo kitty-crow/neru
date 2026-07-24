@@ -66,7 +66,7 @@ export function planNeruBoot(options: NeruBootOptions = {}): NeruBootPlan {
   const artefacts = artifactPaths(options.artifactRoot);
   const executable = resolveLinuxRuntime(options.linuxRuntime);
   const kernel = resolve(options.kernel ?? artefacts.kernel);
-  const initramfs = resolve(options.initramfs ?? artefacts.initramfs);
+  const initramfs = options.initramfs ? resolve(options.initramfs) : undefined;
   const bridgeEnvironment: Record<string, string> = {};
   if (options.filesystemEndpoint) bridgeEnvironment.NERU_FS_ENDPOINT = options.filesystemEndpoint;
   if (options.filesystemToken) bridgeEnvironment.NERU_FS_TOKEN = options.filesystemToken;
@@ -76,10 +76,7 @@ export function planNeruBoot(options: NeruBootOptions = {}): NeruBootPlan {
     argv: [
       "--kernel",
       kernel,
-      "--initramfs",
-      initramfs,
-      "--init",
-      "/init",
+      ...(initramfs ? ["--initramfs", initramfs] : []),
       ...(options.argv ?? []),
     ],
     environment: cleanEnvironment({
@@ -87,7 +84,7 @@ export function planNeruBoot(options: NeruBootOptions = {}): NeruBootPlan {
       ...(options.environment ?? {}),
     }),
     kernel,
-    initramfs,
+    ...(initramfs ? { initramfs } : {}),
   };
 }
 
@@ -97,11 +94,11 @@ export async function probeNeru(
   const plan = planNeruBoot(options);
   await access(plan.executable, constants.X_OK);
   await access(plan.kernel, constants.R_OK);
-  await access(plan.initramfs, constants.R_OK);
+  if (plan.initramfs) await access(plan.initramfs, constants.R_OK);
   return {
     executable: plan.executable,
     kernel: plan.kernel,
-    initramfs: plan.initramfs,
+    ...(plan.initramfs ? { initramfs: plan.initramfs } : {}),
   };
 }
 
