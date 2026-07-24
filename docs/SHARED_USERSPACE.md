@@ -1,78 +1,84 @@
 # Authoritative shared mikuOS userspace
 
 mikuOS has exactly one authoritative persistent userspace. Thistle, Teto and
-NERU/Linux are clients of the same operation-level filesystem service.
+NERU/Linux are clients of the same filesystem authority.
 
-NERU now boots a fixed Linux runtime and mounts that userspace live. It does
-not normally copy the mikuOS installation into an initramfs or create a second
-writable system.
+NERU boots the Linux kernel without a launch image. Linux mounts the selected
+mikuOS userspace as its root filesystem and executes NEMUNEMU from that root.
 
 ```text
-                   authoritative userspace service
-                      generation + transaction log
-                    /              |               \
-             Thistle Tree      Teto Tree       NERU bridge
-                                                   |
-                                             Linux mikuosfs
-                                                   |
-                                        NEMUNEMU + native Linux
+                   authoritative mikuOS userspace
+                         Tree authority
+                    /         |          \
+               Thistle       Teto       NERU
+                                           |
+                                  Linux mikuosfs root
+                                           |
+                             /sbin/nemunemu as PID 1
 ```
 
-The shared roots are `/etc`, `/home`, `/opt`, `/root`, `/usr`, `/var` and any
-other non-runtime paths. `/dev`, `/proc`, `/sys`, `/run` and `/tmp` are local
-to the active kernel/session.
+## No duplicate launch filesystem
+
+The normal NERU artefact contains the kernel and host runtime only. It contains
+no initramfs, BusyBox tree, copied `.thistle.base`, embedded NEMUNEMU binary or
+persistent user data.
+
+The live root supplies `/etc`, `/home`, `/opt`, `/root`, `/sbin`, `/usr`, `/var`
+and the rest of the installed mikuOS system. `/dev`, `/proc`, `/sys`, `/run`
+and `/tmp` remain local to the active Linux session.
+
+The expected kernel command line is:
+
+```text
+root=mikuos rootfstype=mikuosfs rw init=/sbin/nemunemu
+```
+
+If the authority is unavailable, boot fails clearly. NERU must not silently
+create an empty or divergent writable root.
 
 ## Commit model
 
-Every change is an operation transaction. A durable commit writes an intent,
-content-addressed data and metadata, then atomically advances `CURRENT` to a
-new monotonically increasing generation. Incomplete generations are ignored
-on recovery. Per-inode versions provide conflict detection without rejecting
+Every persistent change is an operation transaction. A durable commit writes
+intent, content and metadata, then atomically advances `CURRENT` to a new
+monotonically increasing generation. Incomplete generations are ignored on
+recovery. Per-inode versions provide conflict detection without rejecting
 independent writes made from stale global generations.
 
 Supported operations include create, read/snapshot, write, truncate, rename,
-unlink, mkdir/rmdir, chmod, chown, hard link, symlink, fsync and advisory
-locks. Leases expire after client loss and release abandoned locks.
+unlink, mkdir/rmdir, chmod, chown, hard link, symlink, fsync and advisory locks.
+Leases expire after client loss and release abandoned locks.
 
-## Fixed NERU runtime and live mount
+## Linux bridge
 
-The fixed runtime contains Linux, a minimal initramfs, NEMUNEMU and recovery
-tools. It contains no persistent mikuOS userspace.
+The Linux kernel requires a built-in `mikuosfs` root driver. Its VFS operations
+are forwarded through shared WebAssembly memory to the NERU host worker, which
+uses the selected authority.
 
-At boot, the host runtime connects to the selected authoritative filesystem and
-exposes its operation protocol to the Linux guest. The Linux `mikuosfs` bridge
-mounts the persistent tree at `/mikuos`. NEMUNEMU and native Linux-WASM
-processes traverse the same mount.
+For local Node/Bun execution the authority must expose the same host root chosen
+by mikuOS `--root`. For the browser it must expose the same OPFS-backed tree
+selected by Thistle and Teto. Remote clients may use the same transaction
+protocol through an authenticated service.
 
-If the authority is unavailable, the default policy is to fail clearly rather
-than create a divergent writable installation. A recovery shell may be offered,
-but it must not masquerade as the user's persistent system.
+HTTP is an authority and coordination protocol. It is not the intended
+per-operation transport between one Linux-WASM instance and its local host
+worker. That path should use shared-memory request and completion rings with
+Atomics.
 
-## Local and remote hosts
+## NEMUNEMU
 
-The Node/Bun daemon uses a journaled object store and HTTP coordination API.
-CLI kernels on one host may share one local daemon. Browser and remote clients
-use the same API through an authoritative endpoint. A browser-private OPFS
-store is not presented as cross-client shared state.
+NEMUNEMU lives in the ordinary mikuOS userspace at `/sbin/nemunemu`. Thistle and
+Teto may ignore that executable. Linux loads it from the shared root and starts
+it as PID 1.
 
-For local execution, the guest bridge should use shared memory and atomics
-between Linux-WASM and the host worker. HTTP remains the authority protocol,
-not the per-read transport inside one process.
+NEMUNEMU owns THX loading, Thistle execution and ABI translation. NERU owns the
+Linux root mount and host bridge so NEMUNEMU and native Linux-WASM processes see
+the same files.
 
 ## Proof-of-concept image
 
-The original implementation packaged a copy of `.thistle.base` into an
-initramfs. That path proved the Linux-WASM toolchain, NEMUNEMU packaging and
-real-kernel boot flow. It remains available only through the explicit
-`--poc-image` option for regression testing.
+The original implementation packaged `.thistle.base` into an initramfs. That
+proved the Linux-WASM compiler, kernel build, NEMUNEMU packaging and real-kernel
+boot path. It remains available only through `--poc-image` for regression work.
 
-It is not the production persistence design and must never be treated as a
-second writable mikuOS installation.
-
-## Recovery and checkpoints
-
-A fixed runtime release may be checksummed and cached independently of user
-data. Filesystem checkpoints target one committed authority generation,
-verify all objects, fsync them and atomically replace the selected checkpoint
-reference. A failed checkpoint leaves the previous reference selected and the
-live userspace available.
+It is not the production persistence architecture and must never be treated as
+a second writable mikuOS installation.
