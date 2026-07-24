@@ -14,6 +14,13 @@ if (!globalThis.crypto) {
   Object.defineProperty(globalThis, "crypto", { value: webcrypto });
 }
 
+Object.defineProperty(globalThis, "__neruFilesystemConfig", {
+  configurable: false,
+  enumerable: false,
+  writable: false,
+  value: workerData.filesystem ?? null,
+});
+
 let onmessage = null;
 let onmessageerror = null;
 const pending = [];
