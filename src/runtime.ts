@@ -68,6 +68,7 @@ export function planNeruBoot(options: NeruBootOptions = {}): NeruBootPlan {
   const kernel = resolve(options.kernel ?? artefacts.kernel);
   const initramfs = options.initramfs ? resolve(options.initramfs) : undefined;
   const bridgeEnvironment: Record<string, string> = {};
+  if (options.filesystemRoot) bridgeEnvironment.NERU_FS_ROOT = resolve(options.filesystemRoot);
   if (options.filesystemEndpoint) bridgeEnvironment.NERU_FS_ENDPOINT = options.filesystemEndpoint;
   if (options.filesystemToken) bridgeEnvironment.NERU_FS_TOKEN = options.filesystemToken;
   if (options.filesystemClientId) bridgeEnvironment.NERU_FS_CLIENT_ID = options.filesystemClientId;
