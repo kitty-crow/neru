@@ -67,7 +67,38 @@ chmod 1777 "$ROOTFS/tmp"
 install -m 0755 "$NEMUNEMU_BINARY" "$ROOTFS/sbin/nemunemu"
 install -m 0755 "$BUSYBOX_BINARY" "$ROOTFS/usr/libexec/nemunemu/busybox"
 
-printf 'Live mikuOS root: %s\n' "$ROOTFS"
-printf 'PID 1:            %s\n' "$ROOTFS/sbin/nemunemu"
-printf 'BusyBox:          %s\n' "$ROOTFS/usr/libexec/nemunemu/busybox"
+# Expose the BusyBox rescue commands through the normal PATH, but never replace
+# a real mikuOS command already present in either /bin or /usr/bin.  Relative
+# links keep the live userspace relocatable as one authoritative directory.
+BUSYBOX_APPLETS=(
+    '[' base64 basename cat chmod chown clear cp cut date df dirname dmesg
+    echo env expr false file find free grep head hostname id kill ln ls mkdir
+    mount mv printenv printf ps pwd readlink rm rmdir sed seq sh sleep sort stat
+    strings tail tee test time touch tr true uname uniq uptime wc wget which
+    whoami yes
+)
+
+compatibility_links=0
+for applet in "${BUSYBOX_APPLETS[@]}"; do
+    bin_path="$ROOTFS/bin/$applet"
+    usr_path="$ROOTFS/usr/bin/$applet"
+    if [[ -e "$bin_path" || -L "$bin_path" || -e "$usr_path" || -L "$usr_path" ]]; then
+        continue
+    fi
+    ln -s ../libexec/nemunemu/busybox "$usr_path"
+    compatibility_links=$((compatibility_links + 1))
+done
+
+# Conventional script interpreters expect /bin/sh specifically.  Preserve any
+# existing mikuOS implementation and add the BusyBox hush-backed link only when
+# the path is genuinely absent.
+if [[ ! -e "$ROOTFS/bin/sh" && ! -L "$ROOTFS/bin/sh" ]]; then
+    ln -s ../usr/libexec/nemunemu/busybox "$ROOTFS/bin/sh"
+    compatibility_links=$((compatibility_links + 1))
+fi
+
+printf 'Live mikuOS root:   %s\n' "$ROOTFS"
+printf 'PID 1:              %s\n' "$ROOTFS/sbin/nemunemu"
+printf 'BusyBox:            %s\n' "$ROOTFS/usr/libexec/nemunemu/busybox"
+printf 'Compatibility links: %s created\n' "$compatibility_links"
 printf 'NERU_LIVE_USERSPACE_OK\n'
