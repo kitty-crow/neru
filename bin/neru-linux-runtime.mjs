@@ -27,8 +27,11 @@ const value = (name) => {
 
 if (args.includes("--help")) {
   process.stdout.write(
-    "Usage: neru-linux-runtime --kernel PATH --initramfs PATH " +
-      "[--variant wasm32_nommu|wasm64_nommu] [--cmdline TEXT]\n",
+    "Usage: neru-linux-runtime --kernel PATH " +
+      "[--initramfs PATH] [--variant wasm32_nommu|wasm64_nommu] [--cmdline TEXT]\n" +
+      "\n" +
+      "The normal NERU path uses no initramfs. Linux mounts mikuosfs as / and " +
+      "executes /sbin/nemunemu from the live mikuOS userspace.\n",
   );
   process.exit(0);
 }
@@ -37,11 +40,16 @@ const kernelPath = value("--kernel");
 const initramfsPath = value("--initramfs");
 const variant = value("--variant") ?? process.env.NERU_LINUX_VARIANT ?? "wasm32_nommu";
 const verbose = process.env.NERU_VERBOSE === "1";
-if (!kernelPath || !initramfsPath) {
-  throw new Error("--kernel and --initramfs are required");
-}
+if (!kernelPath) throw new Error("--kernel is required");
 if (variant !== "wasm32_nommu" && variant !== "wasm64_nommu") {
   throw new Error(`Unsupported Linux-WASM variant: ${variant}`);
+}
+
+const filesystemEndpoint = process.env.NERU_FS_ENDPOINT;
+if (!initramfsPath && !filesystemEndpoint) {
+  throw new Error(
+    "Kernel-only NERU boot requires NERU_FS_ENDPOINT so mikuosfs can mount the live userspace",
+  );
 }
 
 class WorkerAdapter {
@@ -53,7 +61,16 @@ class WorkerAdapter {
   constructor(_url, options = {}) {
     this.#worker = new NodeWorker(WORKER_BOOTSTRAP, {
       name: options.name,
-      workerData: { upstreamWorker: UPSTREAM_WORKER },
+      workerData: {
+        upstreamWorker: UPSTREAM_WORKER,
+        filesystem: filesystemEndpoint
+          ? {
+              endpoint: filesystemEndpoint,
+              token: process.env.NERU_FS_TOKEN,
+              clientId: process.env.NERU_FS_CLIENT_ID,
+            }
+          : null,
+      },
       type: "module",
     });
     this.#worker.on("message", (data) => this.#onmessage?.({ data }));
@@ -91,20 +108,25 @@ if (typeof linux !== "function") {
   throw new Error("Pinned Linux-WASM runtime did not expose its Linux launcher");
 }
 
-const [kernelBytes, initramfsBytes] = await Promise.all([
-  readFile(kernelPath),
-  readFile(initramfsPath),
-]);
+const kernelBytes = await readFile(kernelPath);
+const initramfs = initramfsPath
+  ? await readFile(initramfsPath).then((bytes) => bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    ))
+  : new ArrayBuffer(0);
 const kernel = await WebAssembly.compile(kernelBytes);
-const initramfs = initramfsBytes.buffer.slice(
-  initramfsBytes.byteOffset,
-  initramfsBytes.byteOffset + initramfsBytes.byteLength,
+const commandLine = value("--cmdline") ?? (
+  initramfsPath
+    ? "maxcpus=1 root=/dev/ram0 rootfstype=ramfs init=/init console=hvc console=ttyS0"
+    : "maxcpus=1 root=mikuos rootfstype=mikuosfs rw init=/sbin/nemunemu console=hvc console=ttyS0"
 );
-const commandLine = value("--cmdline") ??
-  "maxcpus=3 nohz_full=0,2-63 rcu_nocbs=0,2-63 " +
-  "root=/dev/ram0 rootfstype=ramfs init=/init console=hvc console=ttyS0";
 
-process.stderr.write(`neru: booting Linux (${variant}) from the AOT image\n`);
+process.stderr.write(
+  initramfsPath
+    ? `neru: booting Linux (${variant}) with the legacy proof-of-concept initramfs\n`
+    : `neru: booting Linux (${variant}) directly from the live mikuOS userspace\n`,
+);
 const machine = await linux(
   UPSTREAM_WORKER,
   variant,
