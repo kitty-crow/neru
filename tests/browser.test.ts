@@ -16,7 +16,7 @@ test("browser consumes the kernel and host runtime without an initramfs", () => 
 
 test("browser boot installs required compatibility and forwards terminal input", async () => {
   const input: string[] = [];
-  const fetcher = (async () => new Response(new Uint8Array([0, 97, 115, 109]))) as typeof fetch;
+  const fetcher = (async () => new Response(new Uint8Array([0, 97, 115, 109]))) satisfies typeof fetch;
   const machine = await bootNeruBrowser({
     base: "https://example.test/neru/",
     filesystemEndpoint: "https://example.test/fs/",
