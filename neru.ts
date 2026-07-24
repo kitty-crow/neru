@@ -1,4 +1,5 @@
 import {
+  artifactPaths,
   buildNeruImage,
   buildNeruRuntime,
   bootNeru,
@@ -15,13 +16,14 @@ const option = (name: string): string | undefined => {
 
 if (args.includes("--help") || args.includes("-h")) {
   process.stdout.write(
-    "Usage: bun neru.ts [--output DIR] [--variant NAME] [--boot]\n" +
-    "       bun neru.ts --artifact-root DIR --boot --skip-build\n" +
+    "Usage: bun neru.ts [--output DIR] [--variant NAME] [--fs-endpoint URL] [--boot]\n" +
+    "       bun neru.ts --artifact-root DIR --fs-endpoint URL --boot --skip-build\n" +
     "       bun neru.ts --artifact-root DIR --probe\n" +
     "       bun neru.ts --poc-image --userland DIR [--output DIR] [--boot]\n" +
     "\n" +
-    "The default build creates a fixed NERU runtime and never packages a mikuOS userspace.\n" +
-    "Use --poc-image only to reproduce the original embedded-userspace proof of concept.\n",
+    "The default build contains only vmlinux.wasm and its host runtime. Linux mounts\n" +
+    "the live mikuOS userspace as mikuosfs and starts /sbin/nemunemu from that root.\n" +
+    "Use --poc-image only to reproduce the original embedded-userspace experiment.\n",
   );
   process.exit(0);
 }
@@ -50,12 +52,15 @@ if (!skipBuild) {
   process.stdout.write(
     pocImage
       ? `NERU proof-of-concept image: ${artefacts.root}\n`
-      : `NERU fixed runtime: ${artefacts.root}\n`,
+      : `NERU kernel-only runtime: ${artefacts.root}\n`,
   );
 }
 
 const bootOptions = {
   ...(artifactRoot ? { artifactRoot } : {}),
+  ...(pocImage && artifactRoot
+    ? { initramfs: artifactPaths(artifactRoot).initramfs }
+    : {}),
   ...(option("--fs-endpoint") ? { filesystemEndpoint: option("--fs-endpoint")! } : {}),
   ...(option("--fs-token") ? { filesystemToken: option("--fs-token")! } : {}),
   ...(option("--fs-client-id") ? { filesystemClientId: option("--fs-client-id")! } : {}),
@@ -65,7 +70,11 @@ if (args.includes("--probe")) {
   const result = await probeNeru(bootOptions);
   process.stdout.write(`Linux runtime: ${result.executable}\n`);
   process.stdout.write(`Linux kernel: ${result.kernel}\n`);
-  process.stdout.write(`NERU runtime initramfs: ${result.initramfs}\n`);
+  process.stdout.write(
+    result.initramfs
+      ? `Proof-of-concept initramfs: ${result.initramfs}\n`
+      : "Initramfs: none\n",
+  );
 } else if (args.includes("--boot")) {
   process.exitCode = await bootNeru(bootOptions);
 }
