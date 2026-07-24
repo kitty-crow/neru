@@ -24,7 +24,7 @@ NEMUNEMU_BINARY="$ROOT/dist/nemunemu-$VARIANT.wasm"
 BUSYBOX_BINARY="$WORKSPACE/install/busybox-$VARIANT/bin/busybox"
 BUSYBOX_SOURCE_CONFIG="$WORKSPACE/src/busybox/configs/wasm_defconfig"
 BUSYBOX_BUILD_CONFIG="$WORKSPACE/build/busybox-$VARIANT/.config"
-BUSYBOX_PROFILE_MARKER="$WORKSPACE/install/busybox-$VARIANT/.neru-pid1-shell-v1"
+BUSYBOX_PROFILE_MARKER="$WORKSPACE/install/busybox-$VARIANT/.neru-pid1-shell-v2"
 
 [[ -x "$NEMUNEMU/scripts/build-linux-wasm.sh" ]] || {
     printf 'ERROR: NEMUNEMU submodule is not initialised.\n' >&2
@@ -45,9 +45,9 @@ NEMUNEMU_WASM_OUTPUT="$NEMUNEMU_BINARY" \
 
 busybox_profile_ready() {
     [[ -f "$BUSYBOX_BINARY" && -f "$BUSYBOX_PROFILE_MARKER" && -f "$BUSYBOX_BUILD_CONFIG" ]] || return 1
-    grep -qx 'CONFIG_FEATURE_PREFER_APPLETS=y' "$BUSYBOX_BUILD_CONFIG" || return 1
-    grep -qx 'CONFIG_FEATURE_SH_STANDALONE=y' "$BUSYBOX_BUILD_CONFIG" || return 1
-    grep -qx 'CONFIG_FEATURE_SH_NOFORK=y' "$BUSYBOX_BUILD_CONFIG" || return 1
+    grep -qx '# CONFIG_FEATURE_PREFER_APPLETS is not set' "$BUSYBOX_BUILD_CONFIG" || return 1
+    grep -qx '# CONFIG_FEATURE_SH_STANDALONE is not set' "$BUSYBOX_BUILD_CONFIG" || return 1
+    grep -qx '# CONFIG_FEATURE_SH_NOFORK is not set' "$BUSYBOX_BUILD_CONFIG" || return 1
     grep -qx '# CONFIG_HUSH_JOB is not set' "$BUSYBOX_BUILD_CONFIG" || return 1
 }
 
@@ -66,29 +66,32 @@ import sys
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 
+# WebAssembly NOMMU currently cannot safely use BusyBox's indirect NOFORK
+# applet dispatch: it can trap with an out-of-bounds function-table index.
+# Disabling hush job control is still required so the shell never hands the
+# terminal to a child process and leaves the host shell in the foreground.
 settings = {
-    "CONFIG_FEATURE_PREFER_APPLETS": True,
-    "CONFIG_FEATURE_SH_STANDALONE": True,
-    "CONFIG_FEATURE_SH_NOFORK": True,
+    "CONFIG_FEATURE_PREFER_APPLETS": False,
+    "CONFIG_FEATURE_SH_STANDALONE": False,
+    "CONFIG_FEATURE_SH_NOFORK": False,
     "CONFIG_HUSH_JOB": False,
 }
 
+lines = text.splitlines()
 for name, enabled in settings.items():
     yes = f"{name}=y"
     no = f"# {name} is not set"
     desired = yes if enabled else no
-    alternatives = (yes, no)
-    present = [line for line in alternatives if line in text.splitlines()]
-    if not present:
+    if yes not in lines and no not in lines:
         raise SystemExit(f"ERROR: BusyBox config does not contain {name}")
-    for line in alternatives:
-        if line != desired:
-            text = text.replace(line, desired)
+    text = text.replace(yes, desired).replace(no, desired)
 
 path.write_text(text, encoding="utf-8")
 PY
 
-    rm -f "$BUSYBOX_PROFILE_MARKER"
+    rm -f \
+        "$WORKSPACE/install/busybox-$VARIANT/.neru-pid1-shell-v1" \
+        "$BUSYBOX_PROFILE_MARKER"
     LW_WORKSPACE="$WORKSPACE" \
     LW_VARIANT="$VARIANT" \
         "$LINUX_WASM/linux-wasm.sh" build-busybox
