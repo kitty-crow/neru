@@ -14,7 +14,7 @@
     "install:userspace": "bash scripts/install-live-userspace.sh",
     "smoke:boot": "bash scripts/smoke-boot.sh",
     "fs": "node dist/src/fs/daemon-cli.js",
-    "test": "npm run build && python3 -m unittest discover -s tests -p 'test_*.py' && node --test dist/tests/*.test.js",
+    "test": "npm run build && python3 -m unittest discover -s tests -p 'test_*.py' && node --test tests/*.test.mjs dist/tests/*.test.js",
     "run": "node dist/neru.js --boot --skip-build"
   },
   "devDependencies": {"@types/node": "^22.0.0", "typescript": "^5.0.0"}
