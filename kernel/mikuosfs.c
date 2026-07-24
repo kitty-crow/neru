@@ -269,10 +269,24 @@ static ssize_t mikuosfs_read_iter(struct kiocb *iocb, struct iov_iter *target)
 	return total;
 }
 
+/*
+ * NOMMU private file mappings are implemented by Linux as an allocated copy
+ * populated through kernel_read(). A filesystem must still advertise one mmap
+ * hook before that copy path is considered. mikuosfs never maps host memory
+ * directly, so this hook is only a capability marker and returns -ENOSYS if a
+ * caller attempts to invoke it as a direct mapping operation.
+ */
+static int mikuosfs_mmap_prepare(struct vm_area_desc *desc)
+{
+	(void)desc;
+	return -ENOSYS;
+}
+
 static const struct file_operations mikuosfs_file_operations = {
 	.owner = THIS_MODULE,
 	.llseek = generic_file_llseek,
 	.read_iter = mikuosfs_read_iter,
+	.mmap_prepare = mikuosfs_mmap_prepare,
 };
 
 static int mikuosfs_fill_super(struct super_block *sb, struct fs_context *fc)
