@@ -10,7 +10,7 @@ and Teto. It does not create or maintain another mikuOS installation.
 
 ```text
                    authoritative mikuOS userspace
-                         Tree authority
+                         selected root
                     /         |          \
                Thistle       Teto       NERU
                                            |
@@ -55,14 +55,22 @@ The build fetches and compiles only the LLVM tools and Linux kernel required by
 NERU. It does not build musl, BusyBox or a launch filesystem for the normal
 runtime.
 
-## Boot from the live userspace
+## Boot from the same local root
 
 ```bash
 bun neru.ts \
   --artifact-root dist/neru-runtime-wasm32_nommu \
-  --fs-endpoint http://127.0.0.1:3940 \
+  --fs-root /path/to/mikuOS/.thistle \
   --boot \
   --skip-build
+```
+
+When launched through mikuOS, the backend receives the exact root already
+selected by `--root`, `MIKUOS_ROOT` or the normal `.thistle` default:
+
+```bash
+bun mikuos.ts --kernel=neru
+bun mikuos.ts --kernel=neru --root /path/to/existing/root
 ```
 
 The default kernel command line is equivalent to:
@@ -71,11 +79,19 @@ The default kernel command line is equivalent to:
 maxcpus=1 root=mikuos rootfstype=mikuosfs rw init=/sbin/nemunemu
 ```
 
-The filesystem endpoint must expose the same selected mikuOS root used by the
-Thistle and Teto host. The host runtime passes that authority into the Linux
-workers. The remaining implementation milestone is the built-in Linux
-`mikuosfs` transport that converts VFS operations into the existing NERU shared
-filesystem protocol.
+A remote authority remains available for browser or multi-host sessions:
+
+```bash
+bun neru.ts \
+  --artifact-root dist/neru-runtime-wasm32_nommu \
+  --fs-endpoint https://host.example/mikuos/ \
+  --boot \
+  --skip-build
+```
+
+The remaining implementation milestone is the built-in Linux `mikuosfs`
+transport that converts VFS operations into host-directory or remote-authority
+operations.
 
 ## Filesystem authority
 
@@ -83,10 +99,10 @@ The operation-level authority already exists under `src/fs`. It provides
 monotonically increasing generations, per-inode conflict checks, atomic rename,
 leases, advisory locks, durable commit markers and crash recovery.
 
-For local execution the Linux guest bridge should use shared memory and atomics
-to reach the host worker. The authority may be backed by the same host directory
-selected through mikuOS `--root`, OPFS in the browser, or a remote shared
-service. The transport must not require repackaging the userspace.
+For local execution the Linux guest bridge uses the exact host directory chosen
+by mikuOS. For the browser it uses the same OPFS-backed tree selected by
+Thistle and Teto. Remote clients may use the transaction protocol through an
+authenticated service. The transport must not require repackaging the userspace.
 
 ## Original proof of concept
 
