@@ -22,11 +22,12 @@ ROOTFS="$(realpath -m "$ROOTFS")"
 
 NEMUNEMU_BINARY="$ROOT/dist/nemunemu-$VARIANT.wasm"
 BUSYBOX_SOURCE="$WORKSPACE/src/busybox"
+BUSYBOX_HUSH_SOURCE="$BUSYBOX_SOURCE/shell/hush.c"
 BUSYBOX_BINARY="$WORKSPACE/install/busybox-$VARIANT/bin/busybox"
 BUSYBOX_SOURCE_CONFIG="$BUSYBOX_SOURCE/configs/wasm_defconfig"
 BUSYBOX_BUILD_CONFIG="$WORKSPACE/build/busybox-$VARIANT/.config"
-BUSYBOX_TERMINAL_PATCH="$ROOT/patches/busybox/0001-neru-keep-hush-on-parent-terminal.patch"
-BUSYBOX_PROFILE_MARKER="$WORKSPACE/install/busybox-$VARIANT/.neru-pid1-shell-v3"
+BUSYBOX_PROFILE_MARKER="$WORKSPACE/install/busybox-$VARIANT/.neru-pid1-shell-v4"
+BUSYBOX_SOURCE_MARKER="NERU_WASM_KEEP_PARENT_TERMINAL"
 
 [[ -x "$NEMUNEMU/scripts/build-linux-wasm.sh" ]] || {
     printf 'ERROR: NEMUNEMU submodule is not initialised.\n' >&2
@@ -45,9 +46,9 @@ NEMUNEMU_WASM_OUTPUT="$NEMUNEMU_BINARY" \
     exit 1
 }
 
-busybox_terminal_patch_applied() {
-    git -C "$BUSYBOX_SOURCE" apply --reverse --check "$BUSYBOX_TERMINAL_PATCH" \
-        >/dev/null 2>&1
+busybox_terminal_fix_applied() {
+    [[ -f "$BUSYBOX_HUSH_SOURCE" ]] || return 1
+    grep -Fq "$BUSYBOX_SOURCE_MARKER" "$BUSYBOX_HUSH_SOURCE"
 }
 
 busybox_profile_ready() {
@@ -56,7 +57,7 @@ busybox_profile_ready() {
     grep -qx '# CONFIG_FEATURE_SH_STANDALONE is not set' "$BUSYBOX_BUILD_CONFIG" || return 1
     grep -qx '# CONFIG_FEATURE_SH_NOFORK is not set' "$BUSYBOX_BUILD_CONFIG" || return 1
     grep -qx 'CONFIG_HUSH_JOB=y' "$BUSYBOX_BUILD_CONFIG" || return 1
-    busybox_terminal_patch_applied || return 1
+    busybox_terminal_fix_applied || return 1
 }
 
 if ! busybox_profile_ready; then
@@ -65,8 +66,8 @@ if ! busybox_profile_ready; then
         printf 'The existing proof-of-concept workspace must contain fetched BusyBox sources.\n' >&2
         exit 1
     }
-    [[ -f "$BUSYBOX_TERMINAL_PATCH" ]] || {
-        printf 'ERROR: Neru BusyBox terminal patch is missing: %s\n' "$BUSYBOX_TERMINAL_PATCH" >&2
+    [[ -f "$BUSYBOX_HUSH_SOURCE" ]] || {
+        printf 'ERROR: Linux-WASM BusyBox hush source is missing: %s\n' "$BUSYBOX_HUSH_SOURCE" >&2
         exit 1
     }
 
@@ -100,15 +101,42 @@ for name, enabled in settings.items():
 path.write_text(text, encoding="utf-8")
 PY
 
-    printf '\n===== Apply Neru terminal-ownership patch =====\n'
-    if busybox_terminal_patch_applied; then
-        printf 'BusyBox terminal patch is already applied.\n'
-    elif git -C "$BUSYBOX_SOURCE" apply --check "$BUSYBOX_TERMINAL_PATCH"; then
-        git -C "$BUSYBOX_SOURCE" apply "$BUSYBOX_TERMINAL_PATCH"
-    else
-        printf 'ERROR: Neru BusyBox terminal patch cannot be applied cleanly.\n' >&2
+    printf '\n===== Apply Neru terminal-ownership source fix =====\n'
+    python3 - "$BUSYBOX_HUSH_SOURCE" "$BUSYBOX_SOURCE_MARKER" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+marker = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+
+if marker not in text:
+    function = "static int run_pipe_child(void *arg)"
+    start = text.find(function)
+    if start < 0:
+        raise SystemExit("ERROR: BusyBox run_pipe_child function was not found")
+
+    needle = "\tif (G.run_list_level == 1 && G_interactive_fd) {"
+    position = text.find(needle, start)
+    if position < 0:
+        raise SystemExit("ERROR: BusyBox terminal handoff block was not found")
+
+    replacement = (
+        "#if defined(__wasm__)\n"
+        f"\t/* {marker}: the host process retains the terminal. */\n"
+        "\tif (0) {\n"
+        "#else\n"
+        f"{needle}\n"
+        "#endif"
+    )
+    text = text[:position] + replacement + text[position + len(needle):]
+    path.write_text(text, encoding="utf-8")
+PY
+
+    busybox_terminal_fix_applied || {
+        printf 'ERROR: BusyBox terminal source fix was not applied.\n' >&2
         exit 1
-    fi
+    }
 
     printf '\n===== Clean-build PID 1-safe Linux-WASM BusyBox =====\n'
     rm -rf \
@@ -131,8 +159,8 @@ PY
         printf 'ERROR: Clean BusyBox build did not retain CONFIG_HUSH_JOB=y.\n' >&2
         exit 1
     }
-    busybox_terminal_patch_applied || {
-        printf 'ERROR: BusyBox terminal patch is not present after rebuilding.\n' >&2
+    busybox_terminal_fix_applied || {
+        printf 'ERROR: BusyBox terminal source fix is not present after rebuilding.\n' >&2
         exit 1
     }
     touch "$BUSYBOX_PROFILE_MARKER"
