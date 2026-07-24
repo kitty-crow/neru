@@ -105,10 +105,20 @@ install -d \
     "$MIKUOS_ROOT/proc" \
     "$MIKUOS_ROOT/sys" \
     "$MIKUOS_ROOT/sbin" \
+    "$MIKUOS_ROOT/usr/libexec/neru" \
     "$MIKUOS_ROOT/usr/libexec/nemunemu"
 install -m 0755 "$NEMUNEMU_BINARY" "$ROOTFS/sbin/nemunemu"
 install -m 0755 "$NEMUNEMU_BINARY" "$MIKUOS_ROOT/sbin/nemunemu"
 install -m 0755 -D "$BUSYBOX" "$MIKUOS_ROOT/usr/libexec/nemunemu/busybox"
+
+SMOKE_STORED="$MIKUOS_ROOT/usr/libexec/nemunemu/thx/usr/libexec/neru/rv64-smoke.thx"
+SMOKE_WRAPPER="$MIKUOS_ROOT/usr/libexec/neru/rv64-smoke"
+python3 "$ROOT/scripts/make-rv64-smoke.py" "$SMOKE_STORED"
+cat > "$SMOKE_WRAPPER" <<'WRAPPER'
+#!/sbin/nemunemu --thx-wrapper
+#!nemunemu-thx:/usr/libexec/nemunemu/thx/usr/libexec/neru/rv64-smoke.thx
+WRAPPER
+chmod 0755 "$SMOKE_WRAPPER"
 
 cat > "$ROOTFS/init" <<'INIT'
 #!/bin/sh
@@ -123,6 +133,46 @@ mount -t sysfs sysfs /mikuos/sys 2>/dev/null || :
 exec /sbin/nemunemu --shell /mikuos
 INIT
 chmod 0755 "$ROOTFS/init"
+
+cat > "$ROOTFS/sbin/neru-smoke" <<'SMOKE'
+#!/bin/sh
+set -eu
+
+finish() {
+    /bin/busybox sync 2>/dev/null || :
+    /bin/busybox poweroff -f 2>/dev/null || \
+        /bin/busybox reboot -f 2>/dev/null || \
+        /bin/busybox halt -f 2>/dev/null || :
+    while :; do /bin/busybox sleep 1; done
+}
+
+fail() {
+    printf 'NERU_SMOKE_FAIL:%s\n' "$*"
+    finish
+}
+
+mkdir -p /dev /proc /sys /mikuos/dev /mikuos/proc /mikuos/sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || :
+mount -t proc proc /proc 2>/dev/null || :
+mount -t sysfs sysfs /sys 2>/dev/null || :
+mount --bind /dev /mikuos/dev 2>/dev/null || :
+mount -t proc proc /mikuos/proc 2>/dev/null || :
+mount -t sysfs sysfs /mikuos/sys 2>/dev/null || :
+
+kernel="$(/bin/busybox chroot /mikuos /bin/uname -s)" || fail uname
+[ "$kernel" = "Linux" ] || fail "uname=$kernel"
+
+/bin/busybox chroot /mikuos /bin/true || fail true
+identity="$(/bin/busybox chroot /mikuos /bin/whoami)" || fail whoami
+[ "$identity" = "root" ] || fail "whoami=$identity"
+
+rv64="$(/bin/busybox chroot /mikuos /usr/libexec/neru/rv64-smoke)" || fail rv64
+[ "$rv64" = "NERU_RV64_OK" ] || fail "rv64=$rv64"
+
+printf 'NERU_SMOKE_OK\n'
+finish
+SMOKE
+chmod 0755 "$ROOTFS/sbin/neru-smoke"
 
 printf '\n===== Pack deterministic NERU image =====\n'
 INITRAMFS="$OUTPUT/initramfs.cpio.gz"
