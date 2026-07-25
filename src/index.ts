@@ -1,4 +1,8 @@
-export { buildNeruImage, buildNeruRuntime } from "./build.js";
+export {
+  buildNeruImage,
+  buildNeruRuntime,
+  prepareNeruLiveUserspace,
+} from "./build.js";
 export {
   artifactPaths,
   bootNeru,

@@ -17,12 +17,13 @@ const cleanEnvironment = (): Record<string, string> => Object.fromEntries(
 
 async function runBuilder(
   builder: string,
+  args: readonly string[],
   environment: Record<string, string>,
   label: string,
 ): Promise<void> {
   const packageRoot = neruPackageRoot();
   const code = await new Promise<number>((resolveRun, reject) => {
-    const child = spawn("bash", [builder], {
+    const child = spawn("bash", [builder, ...args], {
       stdio: "inherit",
       env: environment,
       cwd: packageRoot,
@@ -30,7 +31,10 @@ async function runBuilder(
     child.once("error", reject);
     child.once("close", (status: number | null) => resolveRun(status ?? 1));
   });
-  if (code !== 0) throw new Error(`${label} failed with status ${code}`);
+
+  if (code !== 0) {
+    throw new Error(`${label} failed with status ${code}`);
+  }
 }
 
 async function verifyCommonArtifacts(output: NeruArtifactPaths): Promise<void> {
@@ -42,7 +46,35 @@ async function verifyCommonArtifacts(output: NeruArtifactPaths): Promise<void> {
   ]);
 }
 
-/** Build the kernel-only NERU runtime. It contains no initramfs or userspace. */
+/**
+ * Ensure the selected live mikuOS root contains the current NEMUNEMU and
+ * BusyBox compatibility files. The installer performs its own incremental
+ * checks and makes no changes when the installed files are already current.
+ */
+export async function prepareNeruLiveUserspace(
+  root: string,
+  options: Pick<NeruRuntimeBuildOptions, "variant" | "workspace"> = {},
+): Promise<void> {
+  const packageRoot = neruPackageRoot();
+  const variant = neruVariant(options.variant);
+  const environment: Record<string, string> = {
+    ...cleanEnvironment(),
+    LW_VARIANT: variant,
+  };
+
+  if (options.workspace) {
+    environment.LW_WORKSPACE = resolve(options.workspace);
+  }
+
+  await runBuilder(
+    join(packageRoot, "scripts", "install-live-userspace.sh"),
+    [resolve(root)],
+    environment,
+    "NERU live-userspace preparation",
+  );
+}
+
+/** Build or reuse the kernel-only NERU runtime. */
 export async function buildNeruRuntime(
   options: NeruRuntimeBuildOptions = {},
 ): Promise<NeruArtifactPaths> {
@@ -56,11 +88,17 @@ export async function buildNeruRuntime(
     NERU_OUTPUT: output.root,
     LW_VARIANT: variant,
   };
-  if (options.workspace) environment.LW_WORKSPACE = resolve(options.workspace);
-  if (options.rebuildLinux) environment.NERU_REBUILD_LINUX = "1";
+
+  if (options.workspace) {
+    environment.LW_WORKSPACE = resolve(options.workspace);
+  }
+  if (options.rebuildLinux) {
+    environment.NERU_REBUILD_LINUX = "1";
+  }
 
   await runBuilder(
     join(packageRoot, "scripts", "build-runtime.sh"),
+    [],
     environment,
     "NERU kernel-only runtime build",
   );
@@ -88,11 +126,17 @@ export async function buildNeruImage(
     NERU_OUTPUT: output.root,
     LW_VARIANT: variant,
   };
-  if (options.workspace) environment.LW_WORKSPACE = resolve(options.workspace);
-  if (options.rebuildLinux) environment.NERU_REBUILD_LINUX = "1";
+
+  if (options.workspace) {
+    environment.LW_WORKSPACE = resolve(options.workspace);
+  }
+  if (options.rebuildLinux) {
+    environment.NERU_REBUILD_LINUX = "1";
+  }
 
   await runBuilder(
     join(packageRoot, "scripts", "build-image.sh"),
+    [],
     environment,
     "NERU proof-of-concept image build",
   );
