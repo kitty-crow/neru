@@ -68,6 +68,8 @@ const filesystem = initramfsPath
         clientId: process.env.NERU_FS_CLIENT_ID,
       };
 
+const workers = new Set();
+
 class WorkerAdapter {
   #worker;
   #onmessage;
@@ -83,9 +85,13 @@ class WorkerAdapter {
       },
       type: "module",
     });
+
+    workers.add(this.#worker);
+    this.#worker.once("exit", () => workers.delete(this.#worker));
     this.#worker.on("message", (data) => this.#onmessage?.({ data }));
     this.#worker.on("messageerror", (error) => this.#onmessageerror?.(error));
     this.#worker.on("error", (error) => {
+      if (shuttingDown) return;
       if (this.#onerror) this.#onerror(error);
       else throw error;
     });
@@ -95,7 +101,10 @@ class WorkerAdapter {
   set onmessageerror(handler) { this.#onmessageerror = handler; }
   set onerror(handler) { this.#onerror = handler; }
   postMessage(message) { this.#worker.postMessage(message); }
-  terminate() { void this.#worker.terminate(); }
+  terminate() {
+    workers.delete(this.#worker);
+    return this.#worker.terminate();
+  }
 }
 
 Object.defineProperty(globalThis, "Worker", {
@@ -105,6 +114,112 @@ Object.defineProperty(globalThis, "Worker", {
 Object.defineProperty(globalThis, "confirm", {
   configurable: true,
   value: () => false,
+});
+
+const SHUTDOWN_PREFIX = "\u001b]777;neru-shutdown=";
+const SHUTDOWN_TERMINATOR = "\u0007";
+
+let raw = false;
+let shuttingDown = false;
+let pendingConsole = "";
+
+const restoreTerminal = () => {
+  if (raw && process.stdin.isTTY) {
+    process.stdin.setRawMode(false);
+    raw = false;
+  }
+};
+
+const longestShutdownPrefixSuffix = (value) => {
+  const maximum = Math.min(value.length, SHUTDOWN_PREFIX.length - 1);
+
+  for (let length = maximum; length > 0; length -= 1) {
+    if (SHUTDOWN_PREFIX.startsWith(value.slice(-length))) return length;
+  }
+
+  return 0;
+};
+
+const stopLinux = async (requestedStatus) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  const status = Number.isInteger(requestedStatus)
+    && requestedStatus >= 0
+    && requestedStatus <= 255
+    ? requestedStatus
+    : 1;
+
+  restoreTerminal();
+  process.stdin.pause();
+  process.stdin.removeAllListeners("data");
+
+  process.stderr.write(
+    `neru: mikuOS exited with status ${status}; stopping Linux\n`,
+  );
+
+  const activeWorkers = [...workers];
+  await Promise.allSettled(
+    activeWorkers.map((worker) => worker.terminate()),
+  );
+
+  process.exit(status);
+};
+
+const writeGuestConsole = (message) => {
+  if (shuttingDown) return;
+
+  pendingConsole += String(message);
+
+  while (pendingConsole.length > 0) {
+    const markerStart = pendingConsole.indexOf(SHUTDOWN_PREFIX);
+
+    if (markerStart < 0) {
+      const retained = longestShutdownPrefixSuffix(pendingConsole);
+      const visibleEnd = pendingConsole.length - retained;
+
+      if (visibleEnd > 0) {
+        process.stdout.write(pendingConsole.slice(0, visibleEnd));
+      }
+
+      pendingConsole = pendingConsole.slice(visibleEnd);
+      return;
+    }
+
+    if (markerStart > 0) {
+      process.stdout.write(pendingConsole.slice(0, markerStart));
+      pendingConsole = pendingConsole.slice(markerStart);
+    }
+
+    const markerEnd = pendingConsole.indexOf(
+      SHUTDOWN_TERMINATOR,
+      SHUTDOWN_PREFIX.length,
+    );
+
+    if (markerEnd < 0) return;
+
+    const completeMarker = pendingConsole.slice(0, markerEnd + 1);
+    const statusText = pendingConsole.slice(
+      SHUTDOWN_PREFIX.length,
+      markerEnd,
+    );
+
+    pendingConsole = pendingConsole.slice(markerEnd + 1);
+
+    if (!/^(?:0|[1-9][0-9]{0,2})$/.test(statusText)) {
+      process.stdout.write(completeMarker);
+      continue;
+    }
+
+    void stopLinux(Number.parseInt(statusText, 10));
+    return;
+  }
+};
+
+process.once("exit", restoreTerminal);
+process.once("SIGTERM", () => {
+  restoreTerminal();
+  process.exit(143);
 });
 
 const upstreamSource = await readFile(UPSTREAM_LINUX, "utf8");
@@ -146,21 +261,9 @@ const machine = await linux(
   (message) => {
     if (verbose) process.stderr.write(`neru: ${message}\n`);
   },
-  (message) => process.stdout.write(message),
+  writeGuestConsole,
 );
 
-let raw = false;
-const restoreTerminal = () => {
-  if (raw && process.stdin.isTTY) {
-    process.stdin.setRawMode(false);
-    raw = false;
-  }
-};
-process.once("exit", restoreTerminal);
-process.once("SIGTERM", () => {
-  restoreTerminal();
-  process.exit(143);
-});
 process.once("SIGINT", () => machine.key_input("\u0003"));
 
 if (process.stdin.isTTY) {

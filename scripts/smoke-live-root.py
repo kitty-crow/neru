@@ -123,6 +123,77 @@ def run_check(
         )
 
 
+def wait_for_process_exit(
+    pid: int,
+    fd: int,
+    timeout: float,
+) -> tuple[int, bytes]:
+    deadline = time.monotonic() + timeout
+    collected = bytearray()
+    raw_status: int | None = None
+    terminal_closed = False
+
+    while raw_status is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Timed out waiting for Neru to exit")
+
+        if not terminal_closed:
+            readable, _, _ = select.select(
+                [fd],
+                [],
+                [],
+                min(remaining, 0.1),
+            )
+
+            if readable:
+                try:
+                    chunk = os.read(fd, 4096)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        terminal_closed = True
+                    else:
+                        raise
+                else:
+                    if chunk:
+                        sys.stdout.buffer.write(chunk)
+                        sys.stdout.buffer.flush()
+                        collected.extend(chunk)
+                    else:
+                        terminal_closed = True
+
+        try:
+            waited, status = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError as exc:
+            raise RuntimeError(
+                "Neru process was reaped unexpectedly"
+            ) from exc
+
+        if waited == pid:
+            raw_status = status
+
+    while not terminal_closed:
+        readable, _, _ = select.select([fd], [], [], 0.1)
+        if not readable:
+            break
+
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError as exc:
+            if exc.errno == errno.EIO:
+                break
+            raise
+
+        if not chunk:
+            break
+
+        sys.stdout.buffer.write(chunk)
+        sys.stdout.buffer.flush()
+        collected.extend(chunk)
+
+    return os.waitstatus_to_exitcode(raw_status), bytes(collected)
+
+
 def terminate_process_group(pid: int) -> None:
     try:
         pgid = os.getpgid(pid)
@@ -161,6 +232,7 @@ def main() -> int:
     parser.add_argument("--artifact-root", type=Path)
     parser.add_argument("--boot-timeout", type=float, default=180.0)
     parser.add_argument("--command-timeout", type=float, default=20.0)
+    parser.add_argument("--exit-timeout", type=float, default=20.0)
     args = parser.parse_args()
 
     neru_root = Path(__file__).resolve().parent.parent
@@ -216,6 +288,7 @@ def main() -> int:
         raise AssertionError("execvpe unexpectedly returned")
 
     passed = False
+    process_reaped = False
     try:
         read_until(
             fd,
@@ -273,9 +346,41 @@ def main() -> int:
             args.command_timeout,
         )
 
+        os.write(fd, b"exit\n")
+        exit_status, shutdown_output = wait_for_process_exit(
+            pid,
+            fd,
+            args.exit_timeout,
+        )
+        process_reaped = True
+
+        if exit_status != 0:
+            raise AssertionError(
+                f"Neru returned status {exit_status} after a normal shell exit"
+            )
+
+        shutdown_text = shutdown_output.decode(
+            "utf-8",
+            errors="replace",
+        )
+
+        if "restarting" in shutdown_text:
+            raise AssertionError(
+                "NEMUNEMU restarted the shell after a normal exit"
+            )
+
+        expected_shutdown = (
+            "neru: mikuOS exited with status 0; stopping Linux"
+        )
+        if expected_shutdown not in shutdown_text:
+            raise AssertionError(
+                "Neru did not report an orderly Linux shutdown"
+            )
+
         passed = True
     finally:
-        terminate_process_group(pid)
+        if not process_reaped:
+            terminate_process_group(pid)
         try:
             os.close(fd)
         except OSError:
@@ -285,6 +390,7 @@ def main() -> int:
         return 1
 
     print("")
+    print("NERU_GRACEFUL_EXIT_OK")
     print("NERU_LIVE_ROOT_SMOKE_OK")
     return 0
 
